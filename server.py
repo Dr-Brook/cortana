@@ -243,12 +243,13 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
             session["is_speaking"] = False
             await ws.send_json({"type": "state", "state": "idle"})
 
-            # Try to persist to Pocketbase memory
+            # Persist to Pocketbase memory
             try:
                 from memory import save_exchange
-                await save_exchange(session_id, text, full_response)
-            except Exception:
-                pass
+                await save_exchange(session_id, text, full_response, sentiment)
+                logger.debug(f"Saved exchange to memory for session {session_id}")
+            except Exception as e:
+                logger.warning(f"Failed to save exchange to Pocketbase: {e}")
 
     elif msg_type == "audio_start":
         # Client starting raw audio stream for STT

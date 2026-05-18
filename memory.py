@@ -13,11 +13,9 @@ from typing import Optional
 
 import httpx
 
-logger = logging.getLogger("jarvis.memory")
+from config import PB_BASE, PB_USER, PB_PASS
 
-PB_BASE = os.getenv("PB_BASE", "http://localhost:8090")
-PB_USER = os.getenv("PB_USER", "jarvis")
-PB_PASS = os.getenv("PB_PASS", "jarvis123")
+logger = logging.getLogger("jarvis.memory")
 
 _auth_token: Optional[str] = None
 
@@ -204,7 +202,7 @@ async def save_task(title: str, description: str = "", priority: str = "medium")
 async def save_note(title: str, body: str = "", tags: str = "") -> Optional[dict]:
     """Create a new note."""
     headers = await _headers()
-    now = datetime.utcnow().isoformat + "Z" if hasattr(datetime, "utcnow") else datetime.now().isoformat() + "Z"
+    now = datetime.utcnow().isoformat() + "Z"
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             resp = await client.post(
@@ -217,3 +215,69 @@ async def save_note(title: str, body: str = "", tags: str = "") -> Optional[dict
         except Exception as e:
             logger.warning(f"Failed to save note: {e}")
     return None
+
+async def tool_search_memory(query: str) -> str:
+    """Search memory for facts and recent conversations."""
+    results = []
+    facts = await search_facts(query)
+    if facts:
+        results.append("Facts:")
+        for f in facts[:5]:
+            results.append(f"  - {f.get('key', '')}: {f.get('value', '')}")
+    
+    conversations = await get_recent_conversations(limit=5)
+    if conversations:
+        results.append("Recent conversations:")
+        for c in conversations[:5]:
+            role = c.get("role", "")
+            content = c.get("content", "")[:100]
+            results.append(f"  [{role}] {content}...")
+    
+    return "\n".join(results) if results else "No memories found."
+
+
+async def tool_save_fact(key: str, value: str) -> str:
+    """Save a fact to memory."""
+    await save_fact(key, value)
+    return f"Saved: {key} = {value}"
+
+
+# ---------------------------------------------------------------------------
+# Tool Registration Interface (for tools.py auto-discovery)
+# ---------------------------------------------------------------------------
+MODULE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_memory",
+            "description": "Search JARVIS memory for facts and recent conversations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_fact",
+            "description": "Save a fact to JARVIS memory for later recall.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Fact key/label"},
+                    "value": {"type": "string", "description": "Fact value"}
+                },
+                "required": ["key", "value"]
+            }
+        }
+    },
+]
+
+MODULE_EXECUTORS = {
+    "search_memory": tool_search_memory,
+    "save_fact": tool_save_fact,
+}
