@@ -55,35 +55,7 @@ from llm import ollama_chat, ollama_chat_stream
 
 from tts import text_to_speech
 
-# ---------------------------------------------------------------------------
-# STT — Whisper (local)
-# ---------------------------------------------------------------------------
-async def transcribe_audio(audio_data: bytes) -> Optional[str]:
-    """Transcribe audio bytes using local Whisper."""
-    import tempfile
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(audio_data)
-            tmp_path = tmp.name
-
-        proc = await asyncio.create_subprocess_exec(
-            "whisper", tmp_path, "--model", "base", "--output_format", "txt",
-            "--output_dir", tempfile.gettempdir(),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.wait(), None
-        txt_path = tmp_path.replace(".wav", ".txt")
-        if Path(txt_path).exists():
-            result = Path(txt_path).read_text().strip()
-            os.unlink(txt_path)
-            os.unlink(tmp_path)
-            return result
-        os.unlink(tmp_path)
-        return None
-    except Exception as e:
-        logger.warning(f"Whisper STT failed: {e}")
-        return None
+from stt import transcribe_audio
 
 # ---------------------------------------------------------------------------
 # Sentiment analysis (simple heuristic for orb color)
