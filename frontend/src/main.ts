@@ -10,6 +10,7 @@ import { JarvisOrb } from './orb';
 import { WSClient, WS_BASE } from './ws';
 import { VoicePipeline } from './voice';
 import { SettingsManager } from './settings';
+import { WakeWordDetector, WakeWordConfig } from './wakeword';
 import './style.css';
 
 type State = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
@@ -20,6 +21,7 @@ class JarvisApp {
   private ws: WSClient;
   private voice: VoicePipeline;
   private settings: SettingsManager;
+  private wakeWord: WakeWordDetector | null = null;
   private stateLabel: HTMLElement;
   private transcript: HTMLElement;
   private micButton: HTMLElement;
@@ -52,6 +54,9 @@ class JarvisApp {
 
     this.setupUI();
     this.settings.render();
+
+    // Initialize wake word detector
+    this._initWakeWord();
 
     // Connect
     this.ws.connect();
@@ -339,6 +344,36 @@ class JarvisApp {
     this.voice.setVolume(settings.volume);
   }
 
+  // ---- Wake Word ----
+
+  private async _initWakeWord(): Promise<void> {
+    const supported = await WakeWordDetector.isSupported();
+    if (!supported) {
+      console.info('[JARVIS] Wake word detection not available');
+      return;
+    }
+
+    this.wakeWord = new WakeWordDetector({
+      enabled: true,
+      word: 'hey_jarvis',
+      sensitivity: 0.5,
+    });
+
+    this.wakeWord.start(
+      () => {
+        // Wake word detected — start listening
+        console.log('[JARVIS] Wake word detected!');
+        this.startListening();
+      },
+      (level) => {
+        // Update orb idle energy with wake word mic level
+        if (this.state === 'idle') {
+          this.orb.setEnergy(Math.max(0.05, level * 0.5));
+        }
+      }
+    );
+  }
+
   // ---- Utility ----
 
   private escapeHtml(text: string): string {
@@ -351,6 +386,10 @@ class JarvisApp {
     this.ws.disconnect();
     this.voice.destroy();
     this.orb.destroy();
+    if (this.wakeWord) {
+      this.wakeWord.stop();
+      this.wakeWord = null;
+    }
   }
 }
 
