@@ -171,61 +171,105 @@ class JarvisApp {
       return;
     }
 
-    // Use dictation (Web Speech API) instead of raw mic
-    if (VoicePipeline.hasDictation()) {
+    // Prefer backend Whisper STT (privacy + offline) when available
+    if (VoicePipeline.hasBackendSTT()) {
       this.isListening = true;
       this.setState('listening');
       (this.micButton as HTMLElement).classList.add('active');
 
-      let finalText = '';
-      this.voice.startDictation(
-        (text, isFinal) => {
-          if (isFinal) {
-            finalText += (finalText ? ' ' : '') + text;
-            this.transcript.innerHTML = `<span class="user-text">${this.escapeHtml(finalText)}</span>`;
-          } else {
-            // Show interim result
-            this.transcript.innerHTML = `<span class="user-text">${this.escapeHtml(finalText ? finalText + ' ' + text : text)}...</span>`;
-          }
+      // Start audio stream
+      this.ws.startAudioStream();
+
+      // Accumulate audio chunks, send as binary frames
+      let chunkCount = 0;
+      await this.voice.startBackendSTT(
+        (data) => {
+          // Send raw audio chunk to server
+          this.ws.sendAudioChunk(data);
+          chunkCount++;
         },
-        () => {
-          // Recognition ended
-          this.isListening = false;
-          (this.micButton as HTMLElement).classList.remove('active');
-          if (finalText.trim()) {
-            this.ws.sendTranscript(finalText.trim());
-          } else {
-            this.setState('idle');
-          }
+        (level) => {
+          // Update orb energy with mic level
+          this.orb.setEnergy(Math.max(0.2, level));
         },
         (err) => {
-          console.error('[JARVIS] Dictation error:', err);
+          console.error('[JARVIS] Backend STT error:', err);
           this.isListening = false;
           (this.micButton as HTMLElement).classList.remove('active');
-          // Fall back to text input mode
-          this.setState('idle');
-          this.transcript.innerHTML = 'Tap mic to dictate, or type below';
+          // Fall back to Web Speech API
+          this.startDictation();
         }
       );
-    } else {
-      // Fallback: try mic capture (requires HTTPS)
-      try {
-        await this.voice.startMicCapture();
-        this.isListening = true;
-        this.setState('listening');
-        (this.micButton as HTMLElement).classList.add('active');
-      } catch (e) {
-        console.error('[JARVIS] Mic access denied:', e);
+
+      this.transcript.innerHTML = '<span class="user-text">Listening... (backend STT)</span>';
+      return;
+    }
+
+    // Fallback: Web Speech API dictation
+    if (VoicePipeline.hasDictation()) {
+      this.startDictation();
+      return;
+    }
+
+    // Last resort: mic capture (requires HTTPS)
+    try {
+      await this.voice.startMicCapture();
+      this.isListening = true;
+      this.setState('listening');
+      (this.micButton as HTMLElement).classList.add('active');
+    } catch (e) {
+      console.error('[JARVIS] Mic access denied:', e);
+      this.setState('idle');
+      this.transcript.innerHTML = 'Tap mic to dictate, or type below';
+    }
+  }
+
+  private startDictation(): void {
+    this.isListening = true;
+    this.setState('listening');
+    (this.micButton as HTMLElement).classList.add('active');
+
+    let finalText = '';
+    this.voice.startDictation(
+      (text, isFinal) => {
+        if (isFinal) {
+          finalText += (finalText ? ' ' : '') + text;
+          this.transcript.innerHTML = `<span class="user-text">${this.escapeHtml(finalText)}</span>`;
+        } else {
+          this.transcript.innerHTML = `<span class="user-text">${this.escapeHtml(finalText ? finalText + ' ' + text : text)}...</span>`;
+        }
+      },
+      () => {
+        this.isListening = false;
+        (this.micButton as HTMLElement).classList.remove('active');
+        if (finalText.trim()) {
+          this.ws.sendTranscript(finalText.trim());
+        } else {
+          this.setState('idle');
+        }
+      },
+      (err) => {
+        console.error('[JARVIS] Dictation error:', err);
+        this.isListening = false;
+        (this.micButton as HTMLElement).classList.remove('active');
         this.setState('idle');
         this.transcript.innerHTML = 'Tap mic to dictate, or type below';
       }
-    }
+    );
   }
 
   private stopListening(): void {
     if (!this.isListening) return;
     this.isListening = false;
-    this.voice.stopDictation();
+
+    // Stop backend STT if active
+    if (this.voice.backendSTTActive) {
+      this.voice.stopBackendSTT();
+      this.ws.endAudioStream();
+    } else {
+      this.voice.stopDictation();
+    }
+
     (this.micButton as HTMLElement).classList.remove('active');
   }
 

@@ -136,7 +136,12 @@ async def websocket_endpoint(ws: WebSocket):
                 await handle_json_message(ws, session_id, msg)
 
             elif raw.get("bytes"):
-                await handle_audio_message(ws, session_id, raw["bytes"])
+                # Binary audio data — buffer if in audio stream mode, otherwise transcribe
+                session = sessions.get(session_id, {})
+                if "audio_buffer" in session:
+                    session["audio_buffer"].extend(raw["bytes"])
+                else:
+                    await handle_audio_message(ws, session_id, raw["bytes"])
 
     except Exception as e:
         logger.error(f"Session {session_id} error: {e}")
@@ -241,6 +246,21 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
                 await save_exchange(session_id, text, full_response)
             except Exception:
                 pass
+
+    elif msg_type == "audio_start":
+        # Client starting raw audio stream for STT
+        session["audio_buffer"] = bytearray()
+        session["state"] = "listening"
+        await ws.send_json({"type": "state", "state": "listening"})
+
+    elif msg_type == "audio_end":
+        # Client finished audio stream — transcribe it
+        audio_data = bytes(session.pop("audio_buffer", b""))
+        if audio_data:
+            await handle_audio_message(ws, session_id, audio_data)
+        else:
+            session["state"] = "idle"
+            await ws.send_json({"type": "state", "state": "idle"})
 
     elif msg_type == "interrupt":
         session["is_speaking"] = False

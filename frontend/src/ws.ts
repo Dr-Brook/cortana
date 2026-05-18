@@ -161,6 +161,30 @@ export class WSClient {
     this.send({ type: 'transcript', text });
   }
 
+  /**
+   * Start an audio stream for STT.
+   * Server will buffer and transcribe when audio_end is sent.
+   */
+  startAudioStream(): void {
+    this.send({ type: 'audio_start' });
+  }
+
+  /**
+   * Send a raw audio chunk for STT.
+   */
+  sendAudioChunk(data: ArrayBuffer): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(data);
+    }
+  }
+
+  /**
+   * End audio stream. Server will transcribe the buffered audio.
+   */
+  endAudioStream(): void {
+    this.send({ type: 'audio_end' });
+  }
+
   sendInterrupt(): void {
     this.send({ type: 'interrupt' });
   }

@@ -1,10 +1,13 @@
 /**
  * JARVIS — Voice Pipeline
  * Web Audio API for playback, mic capture, audio queue, interrupt handling.
- * Web Speech API for dictation (speech-to-text).
+ * Web Speech API for dictation (speech-to-text) — fallback mode.
+ * MicRecorder for raw audio capture — backend Whisper transcription mode.
  *
  * Built from CLAUDE.md by RJ - https://itsbrook.com
  */
+
+import { MicRecorder } from './mic-recorder';
 
 export class VoicePipeline {
   private audioContext: AudioContext | null = null;
@@ -18,10 +21,14 @@ export class VoicePipeline {
   private audioQueue: ArrayBuffer[] = [];
   private processingQueue = false;
 
-  // Speech-to-text (dictation)
+  // Speech-to-text (dictation — Web Speech API fallback)
   private recognition: any = null;
   private onTranscript: ((text: string) => void) | null = null;
   private onDictationEnd: (() => void) | null = null;
+
+  // Raw mic capture (backend Whisper mode)
+  private micRecorder: MicRecorder | null = null;
+  private onAudioChunk: ((data: ArrayBuffer) => void) | null = null;
 
   async init(): Promise<void> {
     this.audioContext = new AudioContext();
@@ -167,13 +174,69 @@ export class VoicePipeline {
   destroy(): void {
     this.interrupt();
     this.stopMicCapture();
+    this.stopBackendSTT();
     if (this.audioContext) {
       this.audioContext.close();
       this.audioContext = null;
     }
   }
 
-  // ---- Dictation (Web Speech API) ----
+  // ---- Backend Whisper Mode (raw audio capture) ----
+
+  /**
+   * Check if backend Whisper mode is available (MediaRecorder + WebSocket).
+   */
+  static hasBackendSTT(): boolean {
+    return MicRecorder.isSupported();
+  }
+
+  /**
+   * Start raw mic capture for backend Whisper transcription.
+   * Audio chunks are sent via onAudioChunk callback.
+   */
+  async startBackendSTT(
+    onAudioChunk: (data: ArrayBuffer) => void,
+    onLevel: (level: number) => void,
+    onError: (err: string) => void
+  ): Promise<void> {
+    if (!this.micRecorder) {
+      this.micRecorder = new MicRecorder();
+    }
+    this.onAudioChunk = onAudioChunk;
+    await this.micRecorder.start(
+      (data) => {
+        if (this.onAudioChunk) this.onAudioChunk(data);
+      },
+      onLevel,
+      onError
+    );
+  }
+
+  /**
+   * Stop backend STT capture.
+   */
+  stopBackendSTT(): void {
+    if (this.micRecorder) {
+      this.micRecorder.stop();
+    }
+    this.onAudioChunk = null;
+  }
+
+  /**
+   * Get mic level from backend STT recorder.
+   */
+  getBackendSTTLevel(): number {
+    return this.micRecorder?.getLevel() ?? 0;
+  }
+
+  /**
+   * Whether backend STT is actively recording.
+   */
+  get backendSTTActive(): boolean {
+    return this.micRecorder?.recording ?? false;
+  }
+
+  // ---- Dictation (Web Speech API — fallback) ----
 
   /**
    * Check if dictation is available in this browser.
