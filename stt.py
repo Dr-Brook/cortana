@@ -39,8 +39,24 @@ async def transcribe_audio(audio_data: bytes) -> Optional[str]:
 
     Accepts WAV or raw audio. Returns transcript text or None.
     Runs transcription in a thread pool to avoid blocking the event loop.
+    Optionally uses Silero VAD to strip silence before transcription.
     """
     try:
+        # Try VAD preprocessing to strip silence
+        try:
+            from vad import async_extract_speech
+            speech_audio = await async_extract_speech(audio_data)
+            if speech_audio and len(speech_audio) > 0:
+                audio_data = speech_audio
+            else:
+                # No speech detected
+                logger.info("VAD: no speech detected in audio")
+                return None
+        except ImportError:
+            logger.debug("VAD module not available, transcribing full audio")
+        except Exception as e:
+            logger.warning(f"VAD preprocessing failed, transcribing full audio: {e}")
+
         model = _get_model()
 
         # Write audio to temp file for faster-whisper
