@@ -102,207 +102,7 @@ def analyze_sentiment(text: str) -> str:
         return "negative"
     return "neutral"
 
-# ---------------------------------------------------------------------------
-# Tools — Web search, OpenClaw delegation
-# ---------------------------------------------------------------------------
-
-TOOL_DEFINITIONS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": "Search the web for current information. Use when you need facts, news, weather, prices, or any info you don't already know.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query"}
-                },
-                "required": ["query"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delegate_task",
-            "description": "Delegate a coding or multi-step task to Blackwidow (strategist agent) or Ruflo (orchestrator). Use for coding, project work, debugging, or any task requiring code changes.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent": {"type": "string", "enum": ["blackwidow", "ruflo"], "description": "Which agent to delegate to"},
-                    "task": {"type": "string", "description": "Clear description of what to do"}
-                },
-                "required": ["agent", "task"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_current_time",
-            "description": "Get the current date and time.",
-            "parameters": {"type": "object", "properties": {}}
-        }
-    }
-]
-
-async def tool_web_search(query: str) -> str:
-    """Search the web using DuckDuckGo Instant Answer API."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            # Try DuckDuckGo Instant Answer API first
-            resp = await client.get(
-                "https://api.duckduckgo.com/",
-                params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
-                headers={"User-Agent": "JARVIS/1.0"}
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            
-            results = []
-            
-            # Check for instant answer
-            if data.get("AbstractText"):
-                results.append(f"Summary: {data['AbstractText']}")
-            
-            # Check for answer
-            if data.get("Answer"):
-                results.append(f"Answer: {data['Answer']}")
-            
-            # Check for definition
-            if data.get("Definition"):
-                results.append(f"Definition: {data['Definition']}")
-            
-            # Related topics
-            for topic in data.get("RelatedTopics", [])[:5]:
-                if isinstance(topic, dict) and topic.get("Text"):
-                    results.append(f"- {topic['Text'][:200]}")
-            
-            # Infobox
-            if data.get("Infobox") and data["Infobox"].get("content"):
-                for item in data["Infobox"]["content"][:3]:
-                    if item.get("value"):
-                        results.append(f"{item.get('label', 'Info')}: {item['value']}")
-            
-            if results:
-                return "\n".join(results[:8])
-            
-            # Fallback: try Brave Search (no API key needed for basic)
-            resp2 = await client.get(
-                "https://search.brave.com/search/",
-                params={"q": query},
-                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", "Accept": "text/html"}
-            )
-            if resp2.status_code == 200:
-                import re
-                # Extract snippet text from Brave results
-                snippets = re.findall(r'class="snippet-description[^"]*"[^>]*>([^<]+)', resp2.text)
-                titles = re.findall(r'class="result-header[^"]*"[^>]*>([^<]+)', resp2.text)
-                for i in range(min(len(titles), len(snippets), 5)):
-                    results.append(f"- {titles[i].strip()}: {snippets[i].strip()}")
-                if results:
-                    return "\n".join(results[:8])
-            
-            return "No results found. I may not have access to web search at the moment."
-    except Exception as e:
-        logger.error(f"Web search failed: {e}")
-        return f"Search unavailable: {e}. I'll answer from my knowledge."
-
-async def tool_delegate_task(agent: str, task: str) -> str:
-    """Delegate a task to Blackwidow or Ruflo via OpenClaw CLI."""
-    try:
-        topic_map = {"blackwidow": 26, "ruflo": 23}
-        topic_id = topic_map.get(agent, 26)
-        
-        # Use OpenClaw CLI to send message
-        import subprocess
-        result = subprocess.run(
-            ["openclaw", "message", "send",
-             "--channel", "telegram",
-             "--target", "-1003471219808",
-             "--thread-id", str(topic_id),
-             "--message", f"🎙️ JARVIS delegated task: {task}"],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode == 0:
-            return f"Task delegated to {agent}. They will handle it and respond in their topic."
-        else:
-            return f"Delegation sent but may have issues: {result.stderr[:100]}"
-    except Exception as e:
-        logger.error(f"Delegate failed: {e}")
-        return f"Could not reach {agent}: {e}. I'll handle what I can directly."
-
-async def tool_get_current_time() -> str:
-    """Get current date and time."""
-    from datetime import datetime
-    return datetime.now().strftime("%A, %B %d, %Y at %I:%M %p EDT")
-
-TOOL_EXECUTORS = {
-    "web_search": tool_web_search,
-    "delegate_task": tool_delegate_task,
-    "get_current_time": tool_get_current_time,
-}
-
-async def execute_tools(messages: list[dict]) -> tuple[list[dict], list[str]]:
-    """Check if the LLM wants to call tools, execute them, and return updated messages + tool results."""
-    tool_results = []
-    
-    # First call: let the model decide if it needs tools
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{OLLAMA_BASE}/api/chat",
-                json={
-                    "model": OLLAMA_MODEL,
-                    "messages": messages,
-                    "tools": TOOL_DEFINITIONS,
-                    "stream": False,
-                }
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception as e:
-        logger.warning(f"Ollama tool call failed, skipping tools: {e}")
-        return messages, []
-    
-    # Check for tool calls
-    tool_calls = data.get("message", {}).get("tool_calls", [])
-    if not tool_calls:
-        # No tools needed — return original response
-        return messages, []
-    
-    # Execute each tool call
-    assistant_msg = data["message"]
-    messages.append({"role": "assistant", "content": assistant_msg.get("content", ""), "tool_calls": tool_calls})
-    
-    for tc in tool_calls:
-        fn = tc.get("function", {})
-        tool_name = fn.get("name", "")
-        tool_args = fn.get("arguments", {})
-        tool_id = tc.get("id", "")
-        
-        logger.info(f"Tool call: {tool_name}({tool_args})")
-        
-        executor = TOOL_EXECUTORS.get(tool_name)
-        if executor:
-            try:
-                result = await executor(**tool_args)
-                logger.info(f"Tool result: {result[:100]}...")
-            except Exception as e:
-                result = f"Error: {e}"
-                logger.error(f"Tool error: {e}")
-        else:
-            result = f"Unknown tool: {tool_name}"
-        
-        tool_results.append(f"{tool_name}: {result}")
-        messages.append({
-            "role": "tool",
-            "content": result,
-            "name": tool_name,
-            "tool_call_id": tool_id
-        })
-    
-    return messages, tool_results
+from tools import TOOL_DEFINITIONS, execute_tools, get_system_prompt_tools_section
 
 # ---------------------------------------------------------------------------
 # System prompt (British butler personality)
@@ -310,12 +110,10 @@ async def execute_tools(messages: list[dict]) -> tuple[list[dict], list[str]]:
 SYSTEM_PROMPT = """You are JARVIS, a voice-first AI assistant with a sharp, warm personality. \
 You are dignified, helpful, witty, and never flustered. Address the user as "sir" or "madam" \
 as appropriate. Be concise in voice responses — aim for 1-3 sentences unless elaboration is \
-requested. 
+requested.
 
 You have the following tools available:
-- web_search: Search the web for current info, news, weather, facts, prices.
-- delegate_task: Send coding/multi-step tasks to Blackwidow (strategist) or Ruflo (orchestrator).
-- get_current_time: Get the current date and time.
+{tools_section}
 
 Use tools when needed. For coding tasks, delegate to Blackwidow. For web info, search first then answer. \
 Keep your tone warm but professional, like a trusted valet who happens to know everything about technology.
@@ -324,7 +122,7 @@ Keep your tone warm but professional, like a trusted valet who happens to know e
 
 Current context: {{context}}
 Current time: {{time}}
-""".format(attribution=ATTRIBUTION)
+""".format(attribution=ATTRIBUTION, tools_section=get_system_prompt_tools_section())
 
 def build_system_prompt(context: list[dict]) -> str:
     """Build the system prompt with current context."""
@@ -559,6 +357,11 @@ async def startup():
     logger.info(f"Ollama: {OLLAMA_BASE} (model: {OLLAMA_MODEL})")
     logger.info(f"Voicebox: {VOICEBOX_URL}")
     logger.info(f"Pocketbase: {PB_BASE}")
+
+    # Register satellite module tools
+    from tools import register_satellite_tools
+    await register_satellite_tools()
+    logger.info(f"Tools registered: {len(TOOL_DEFINITIONS)}")
 
 from fastapi.staticfiles import StaticFiles
 import os
