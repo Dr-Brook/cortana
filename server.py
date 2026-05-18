@@ -6,10 +6,8 @@ Built from CLAUDE.md by RJ - https://itsbrook.com
 """
 
 import asyncio
-import base64
 import json
 import logging
-import os
 import time
 import uuid
 from pathlib import Path
@@ -19,29 +17,15 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-OLLAMA_BASE = os.getenv("OLLAMA_BASE", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "glm-5.1:cloud")
-VOICEBOX_URL = os.getenv("VOICEBOX_URL", "http://localhost:17493")
-VOICEBOX_PROFILE = os.getenv("VOICEBOX_PROFILE", "35ec6078-2f64-463c-aa02-77e4e4ade095")
-PB_BASE = os.getenv("PB_BASE", "http://localhost:8090")
-BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8444"))
-FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "3002"))
-MAX_CONTEXT = int(os.getenv("MAX_CONTEXT", "10"))
-
-# Tool configs
-SERPER_API_KEY = os.getenv("SERPER_API_KEY", "SERPER_KEY_REMOVED")
-OPENCLAW_URL = os.getenv("OPENCLAW_URL", "http://localhost:4152")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "OPENROUTER_KEY_REMOVED")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
-DUCKDUCKGO_URL = "https://api.duckduckgo.com/"
-
-ATTRIBUTION = "Built from CLAUDE.md by RJ - https://itsbrook.com"
+from config import (
+    OLLAMA_BASE, OLLAMA_MODEL, OPENROUTER_API_KEY, OPENROUTER_MODEL,
+    VOICEBOX_URL, VOICEBOX_PROFILE, PB_BASE,
+    BACKEND_PORT, FRONTEND_PORT, MAX_CONTEXT,
+    SERPER_API_KEY, OPENCLAW_URL, DUCKDUCKGO_URL,
+    ATTRIBUTION,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
