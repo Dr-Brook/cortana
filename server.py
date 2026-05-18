@@ -113,6 +113,9 @@ async def websocket_endpoint(ws: WebSocket):
     sessions[session_id] = {"context": [], "state": "idle", "is_speaking": False}
     logger.info(f"Session {session_id} connected")
 
+    # Tell client their session ID
+    await ws.send_json({"type": "session_assigned", "session_id": session_id})
+
     try:
         while True:
             # Receive message (text JSON or binary audio)
@@ -265,6 +268,34 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
         else:
             session["state"] = "idle"
             await ws.send_json({"type": "state", "state": "idle"})
+
+    elif msg_type == "resume_session":
+        # Client wants to resume an existing session
+        old_session_id = msg.get("session_id", "")
+        if old_session_id and old_session_id in sessions:
+            # Session still in memory — switch to it
+            session = sessions[old_session_id]
+            # Delete the new empty session we just created
+            sessions.pop(session_id, None)
+            session_id = old_session_id
+            logger.info(f"Resumed session {session_id}")
+            await ws.send_json({"type": "session_resumed", "session_id": session_id})
+        else:
+            # Session not found — try loading from Pocketbase
+            try:
+                from memory import get_recent_conversations
+                conversations = await get_recent_conversations(session_id=old_session_id, limit=MAX_CONTEXT)
+                if conversations:
+                    # Load context from Pocketbase
+                    context = []
+                    for conv in reversed(conversations):
+                        context.append({"role": conv.get("role", ""), "content": conv.get("content", "")})
+                    sessions[session_id]["context"] = context
+                    logger.info(f"Loaded {len(context)} messages from Pocketbase for session {old_session_id}")
+                await ws.send_json({"type": "session_resumed", "session_id": session_id})
+            except Exception as e:
+                logger.warning(f"Failed to load session from Pocketbase: {e}")
+                await ws.send_json({"type": "session_assigned", "session_id": session_id})
 
     elif msg_type == "interrupt":
         session["is_speaking"] = False

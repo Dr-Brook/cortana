@@ -42,9 +42,12 @@ export class WSClient {
   private isReceivingAudio = false;
   private options: WSClientOptions;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private sessionId: string | null = null;
 
   constructor(options: WSClientOptions = {}) {
     this.options = options;
+    // Restore session ID from localStorage
+    this.sessionId = localStorage.getItem('jarvis_session_id');
   }
 
   connect(): void {
@@ -58,6 +61,13 @@ export class WSClient {
         this.reconnectAttempts = 0;
         this.flushBuffer();
         this.startPing();
+
+        // Resume session if we have one
+        if (this.sessionId) {
+          this.send({ type: 'resume_session', session_id: this.sessionId });
+          console.log(`[WS] Resuming session: ${this.sessionId}`);
+        }
+
         this.options.onOpen?.();
       };
 
@@ -130,6 +140,18 @@ export class WSClient {
         break;
       case 'pong':
         // Heartbeat response
+        break;
+      case 'session_assigned':
+        // Server assigned us a session ID
+        if (msg.session_id) {
+          this.sessionId = msg.session_id;
+          localStorage.setItem('jarvis_session_id', msg.session_id);
+          console.log(`[WS] Session assigned: ${msg.session_id}`);
+        }
+        break;
+      case 'session_resumed':
+        // Server confirmed session resume
+        console.log(`[WS] Session resumed: ${msg.session_id}`);
         break;
       default:
         this.options.onMessage?.(msg);
