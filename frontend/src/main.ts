@@ -184,7 +184,8 @@ class JarvisApp {
       let chunkCount = 0;
       await this.voice.startBackendSTT(
         (data) => {
-          // Send raw audio chunk to server
+          // Gate: don't send audio chunks while JARVIS is speaking
+          if (this.state === 'speaking') return;
           this.ws.sendAudioChunk(data);
           chunkCount++;
         },

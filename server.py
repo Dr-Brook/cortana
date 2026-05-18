@@ -138,6 +138,9 @@ async def websocket_endpoint(ws: WebSocket):
             elif raw.get("bytes"):
                 # Binary audio data — buffer if in audio stream mode, otherwise transcribe
                 session = sessions.get(session_id, {})
+                # Echo cancel: discard audio while speaking
+                if session.get("is_speaking"):
+                    continue
                 if "audio_buffer" in session:
                     session["audio_buffer"].extend(raw["bytes"])
                 else:
