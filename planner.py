@@ -1,5 +1,5 @@
 """
-CORTANA — Conversational Task Planner
+JARVIS — Conversational Task Planner
 Asks clarifying questions before building, breaks down complex requests.
 
 Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -9,7 +9,7 @@ import json
 import logging
 from typing import Optional
 
-logger = logging.getLogger("cortana.planner")
+logger = logging.getLogger("jarvis.planner")
 
 # Planning templates
 CLARIFYING_QUESTIONS = {

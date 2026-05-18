@@ -1,5 +1,5 @@
 """
-CORTANA — Web Browsing Module
+JARVIS — Web Browsing Module
 Playwright-based web browsing with local processing only.
 
 Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import Optional
 
-logger = logging.getLogger("cortana.browser")
+logger = logging.getLogger("jarvis.browser")
 
 _browser = None
 _context = None
@@ -25,7 +25,7 @@ async def _get_browser():
             _browser = await pw.chromium.launch(headless=True)
             _context = await _browser.new_context(
                 viewport={"width": 1280, "height": 720},
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) CORTANA/1.0",
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) JARVIS/1.0",
             )
         except Exception as e:
             logger.error(f"Failed to launch browser: {e}")

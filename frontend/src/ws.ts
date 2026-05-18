@@ -1,11 +1,24 @@
 /**
- * CORTANA — WebSocket Client
+ * JARVIS — WebSocket Client
  * Auto-reconnect with exponential backoff, JSON + binary handling.
  *
  * Built from CLAUDE.md by RJ - https://itsbrook.com
  */
 
-const WS_BASE = import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:8444/ws`;
+// Dynamic WebSocket URL — uses the same host as the page.
+// Caddy routes /ws to the backend.
+// If accessing directly (localhost:3002), use port 8444.
+export const WS_BASE = import.meta.env.VITE_WS_URL || (() => {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const isDev = window.location.port === '5173';
+  const isDirect = window.location.port === '3002' || isDev;
+  if (isDirect) {
+    // Direct access — backend is on same host, port 8444
+    return `${proto}//${window.location.hostname}:8444/ws`;
+  }
+  // Proxied via Caddy — same host, /ws path routes to backend
+  return `${proto}//${window.location.host}/ws`;
+})();
 
 type MessageHandler = (msg: any) => void;
 type AudioHandler = (data: ArrayBuffer) => void;
@@ -36,11 +49,12 @@ export class WSClient {
 
   connect(): void {
     try {
+      console.log(`[WS] Connecting to: ${WS_BASE}`);
       this.ws = new WebSocket(WS_BASE);
       this.ws.binaryType = 'arraybuffer';
 
       this.ws.onopen = () => {
-        console.log('[WS] Connected to CORTANA server');
+        console.log('[WS] Connected to JARVIS server');
         this.reconnectAttempts = 0;
         this.flushBuffer();
         this.startPing();
@@ -69,6 +83,7 @@ export class WSClient {
 
       this.ws.onerror = (err) => {
         console.error('[WS] Error:', err);
+        console.error('[WS] Error readyState:', this.ws?.readyState, 'URL:', this.ws?.url);
         this.options.onError?.(err);
       };
     } catch (e) {

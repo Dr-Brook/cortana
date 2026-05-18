@@ -1,5 +1,5 @@
 """
-CORTANA — Work Mode Module
+JARVIS — Work Mode Module
 Persistent Claude Code session management.
 
 Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import Optional
 
-logger = logging.getLogger("cortana.workmode")
+logger = logging.getLogger("jarvis.workmode")
 
 _sessions: dict[str, dict] = {}  # session_name -> {process, created, last_active}
 

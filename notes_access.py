@@ -1,5 +1,5 @@
 """
-CORTANA — Apple Notes Access
+JARVIS — Apple Notes Access
 Read and create notes via AppleScript bridge.
 
 Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import Optional
 
-logger = logging.getLogger("cortana.notes")
+logger = logging.getLogger("jarvis.notes")
 
 
 async def _run_applescript(script: str) -> Optional[str]:

@@ -1,5 +1,5 @@
 """
-CORTANA — Apple Mail Access
+JARVIS — Apple Mail Access
 Read-only mail access via AppleScript bridge.
 
 Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import Optional
 
-logger = logging.getLogger("cortana.mail")
+logger = logging.getLogger("jarvis.mail")
 
 
 async def _run_applescript(script: str) -> Optional[str]:

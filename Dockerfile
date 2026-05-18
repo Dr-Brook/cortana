@@ -1,4 +1,4 @@
-# CORTANA — Voice-First AI Assistant for macOS
+# JARVIS — Voice-First AI Assistant for macOS
 # Built from CLAUDE.md by RJ - https://itsbrook.com
 
 FROM python:3.13-slim

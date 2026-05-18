@@ -1,5 +1,5 @@
 """
-CORTANA — System Actions
+JARVIS — System Actions
 macOS system control via AppleScript wrappers.
 
 Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import Optional
 
-logger = logging.getLogger("cortana.actions")
+logger = logging.getLogger("jarvis.actions")
 
 
 async def _run_applescript(script: str) -> Optional[str]:

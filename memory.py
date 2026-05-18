@@ -1,5 +1,5 @@
 """
-CORTANA — Memory Module
+JARVIS — Memory Module
 Pocketbase-backed persistent memory with three-tier context.
 
 Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -13,11 +13,11 @@ from typing import Optional
 
 import httpx
 
-logger = logging.getLogger("cortana.memory")
+logger = logging.getLogger("jarvis.memory")
 
 PB_BASE = os.getenv("PB_BASE", "http://localhost:8090")
-PB_USER = os.getenv("PB_USER", "cortana")
-PB_PASS = os.getenv("PB_PASS", "cortana123")
+PB_USER = os.getenv("PB_USER", "jarvis")
+PB_PASS = os.getenv("PB_PASS", "jarvis123")
 
 _auth_token: Optional[str] = None
 

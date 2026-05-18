@@ -1,5 +1,5 @@
 """
-CORTANA — Voice-First AI Assistant for macOS
+JARVIS — Voice-First AI Assistant for macOS
 FastAPI main server with WebSocket, Ollama LLM, TTS, and STT pipelines.
 
 Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -34,22 +34,29 @@ BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8444"))
 FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "3002"))
 MAX_CONTEXT = int(os.getenv("MAX_CONTEXT", "10"))
 
+# Tool configs
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "SERPER_KEY_REMOVED")
+OPENCLAW_URL = os.getenv("OPENCLAW_URL", "http://localhost:4152")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "OPENROUTER_KEY_REMOVED")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
+DUCKDUCKGO_URL = "https://api.duckduckgo.com/"
+
 ATTRIBUTION = "Built from CLAUDE.md by RJ - https://itsbrook.com"
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-logger = logging.getLogger("cortana")
+logger = logging.getLogger("jarvis")
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-app = FastAPI(title="CORTANA", version="0.1.0", description=ATTRIBUTION)
+app = FastAPI(title="JARVIS", version="0.1.0", description=ATTRIBUTION)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[f"http://localhost:{FRONTEND_PORT}", "http://127.0.0.1:{FRONTEND_PORT}"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -77,25 +84,60 @@ async def ollama_chat(messages: list[dict], model: str = OLLAMA_MODEL) -> str:
         return data.get("message", {}).get("content", "")
 
 async def ollama_chat_stream(messages: list[dict], model: str = OLLAMA_MODEL):
-    """Stream chat responses from Ollama, yielding text chunks."""
+    """Stream chat responses from Ollama, with OpenRouter fallback."""
     payload = {
         "model": model,
         "messages": messages,
         "stream": True,
     }
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream("POST", f"{OLLAMA_BASE}/api/chat", json=payload) as resp:
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", f"{OLLAMA_BASE}/api/chat", json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                        content = chunk.get("message", {}).get("content", "")
+                        if content:
+                            yield content
+                        if chunk.get("done", False):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+    except Exception as e:
+        logger.warning(f"Ollama failed, falling back to OpenRouter: {e}")
+        async for chunk in openrouter_chat_stream(messages):
+            yield chunk
+
+async def openrouter_chat_stream(messages: list[dict], model: str = OPENROUTER_MODEL):
+    """Stream chat responses from OpenRouter (cloud fallback)."""
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+    }
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://jarvis.local",
+        "X-Title": "JARVIS Voice Assistant",
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async with client.stream("POST", "https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():
-                if not line.strip():
+                if not line.strip() or not line.startswith("data: "):
                     continue
+                data = line[6:]  # strip "data: "
+                if data == "[DONE]":
+                    break
                 try:
-                    chunk = json.loads(line)
-                    content = chunk.get("message", {}).get("content", "")
+                    chunk = json.loads(data)
+                    content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
                     if content:
                         yield content
-                    if chunk.get("done", False):
-                        break
                 except json.JSONDecodeError:
                     continue
 
@@ -106,10 +148,10 @@ async def tts_voicebox(text: str, profile_id: str = VOICEBOX_PROFILE) -> Optiona
     """Generate TTS audio via Voicebox API. Returns WAV bytes or None."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Request generation
+            # Request generation (must specify kokoro engine)
             resp = await client.post(
                 f"{VOICEBOX_URL}/generate",
-                json={"text": text, "profile_id": profile_id},
+                json={"text": text, "profile_id": profile_id, "engine": "kokoro"},
             )
             resp.raise_for_status()
             gen = resp.json()
@@ -124,10 +166,17 @@ async def tts_voicebox(text: str, profile_id: str = VOICEBOX_PROFILE) -> Optiona
                 status_resp = await client.get(f"{VOICEBOX_URL}/history/{gen_id}")
                 if status_resp.status_code == 200:
                     data = status_resp.json()
-                    if data.get("status") == "completed" or data.get("path"):
-                        audio_path = data.get("path", "")
-                        if audio_path and Path(audio_path).exists():
-                            return Path(audio_path).read_bytes()
+                    if data.get("status") == "completed":
+                        audio_path = data.get("audio_path") or data.get("path", "")
+                        if audio_path:
+                            # Resolve relative paths against Voicebox data dir
+                            full_path = Path(audio_path) if Path(audio_path).is_absolute() else Path("/Users/rj/Library/Application Support/sh.voicebox.app/generations") / Path(audio_path).name
+                            if full_path.exists():
+                                return full_path.read_bytes()
+                            # Try downloading via API
+                            dl_resp = await client.get(f"{VOICEBOX_URL}/history/{gen_id}/download")
+                            if dl_resp.status_code == 200:
+                                return dl_resp.content
                 elif status_resp.status_code != 202:
                     break
 
@@ -215,14 +264,222 @@ def analyze_sentiment(text: str) -> str:
     return "neutral"
 
 # ---------------------------------------------------------------------------
+# Tools — Web search, OpenClaw delegation
+# ---------------------------------------------------------------------------
+
+TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for current information. Use when you need facts, news, weather, prices, or any info you don't already know.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delegate_task",
+            "description": "Delegate a coding or multi-step task to Blackwidow (strategist agent) or Ruflo (orchestrator). Use for coding, project work, debugging, or any task requiring code changes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "enum": ["blackwidow", "ruflo"], "description": "Which agent to delegate to"},
+                    "task": {"type": "string", "description": "Clear description of what to do"}
+                },
+                "required": ["agent", "task"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "Get the current date and time.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    }
+]
+
+async def tool_web_search(query: str) -> str:
+    """Search the web using DuckDuckGo Instant Answer API."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            # Try DuckDuckGo Instant Answer API first
+            resp = await client.get(
+                "https://api.duckduckgo.com/",
+                params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
+                headers={"User-Agent": "JARVIS/1.0"}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            results = []
+            
+            # Check for instant answer
+            if data.get("AbstractText"):
+                results.append(f"Summary: {data['AbstractText']}")
+            
+            # Check for answer
+            if data.get("Answer"):
+                results.append(f"Answer: {data['Answer']}")
+            
+            # Check for definition
+            if data.get("Definition"):
+                results.append(f"Definition: {data['Definition']}")
+            
+            # Related topics
+            for topic in data.get("RelatedTopics", [])[:5]:
+                if isinstance(topic, dict) and topic.get("Text"):
+                    results.append(f"- {topic['Text'][:200]}")
+            
+            # Infobox
+            if data.get("Infobox") and data["Infobox"].get("content"):
+                for item in data["Infobox"]["content"][:3]:
+                    if item.get("value"):
+                        results.append(f"{item.get('label', 'Info')}: {item['value']}")
+            
+            if results:
+                return "\n".join(results[:8])
+            
+            # Fallback: try Brave Search (no API key needed for basic)
+            resp2 = await client.get(
+                "https://search.brave.com/search/",
+                params={"q": query},
+                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", "Accept": "text/html"}
+            )
+            if resp2.status_code == 200:
+                import re
+                # Extract snippet text from Brave results
+                snippets = re.findall(r'class="snippet-description[^"]*"[^>]*>([^<]+)', resp2.text)
+                titles = re.findall(r'class="result-header[^"]*"[^>]*>([^<]+)', resp2.text)
+                for i in range(min(len(titles), len(snippets), 5)):
+                    results.append(f"- {titles[i].strip()}: {snippets[i].strip()}")
+                if results:
+                    return "\n".join(results[:8])
+            
+            return "No results found. I may not have access to web search at the moment."
+    except Exception as e:
+        logger.error(f"Web search failed: {e}")
+        return f"Search unavailable: {e}. I'll answer from my knowledge."
+
+async def tool_delegate_task(agent: str, task: str) -> str:
+    """Delegate a task to Blackwidow or Ruflo via OpenClaw CLI."""
+    try:
+        topic_map = {"blackwidow": 26, "ruflo": 23}
+        topic_id = topic_map.get(agent, 26)
+        
+        # Use OpenClaw CLI to send message
+        import subprocess
+        result = subprocess.run(
+            ["openclaw", "message", "send",
+             "--channel", "telegram",
+             "--target", "-1003471219808",
+             "--thread-id", str(topic_id),
+             "--message", f"🎙️ JARVIS delegated task: {task}"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            return f"Task delegated to {agent}. They will handle it and respond in their topic."
+        else:
+            return f"Delegation sent but may have issues: {result.stderr[:100]}"
+    except Exception as e:
+        logger.error(f"Delegate failed: {e}")
+        return f"Could not reach {agent}: {e}. I'll handle what I can directly."
+
+async def tool_get_current_time() -> str:
+    """Get current date and time."""
+    from datetime import datetime
+    return datetime.now().strftime("%A, %B %d, %Y at %I:%M %p EDT")
+
+TOOL_EXECUTORS = {
+    "web_search": tool_web_search,
+    "delegate_task": tool_delegate_task,
+    "get_current_time": tool_get_current_time,
+}
+
+async def execute_tools(messages: list[dict]) -> tuple[list[dict], list[str]]:
+    """Check if the LLM wants to call tools, execute them, and return updated messages + tool results."""
+    tool_results = []
+    
+    # First call: let the model decide if it needs tools
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{OLLAMA_BASE}/api/chat",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "messages": messages,
+                    "tools": TOOL_DEFINITIONS,
+                    "stream": False,
+                }
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.warning(f"Ollama tool call failed, skipping tools: {e}")
+        return messages, []
+    
+    # Check for tool calls
+    tool_calls = data.get("message", {}).get("tool_calls", [])
+    if not tool_calls:
+        # No tools needed — return original response
+        return messages, []
+    
+    # Execute each tool call
+    assistant_msg = data["message"]
+    messages.append({"role": "assistant", "content": assistant_msg.get("content", ""), "tool_calls": tool_calls})
+    
+    for tc in tool_calls:
+        fn = tc.get("function", {})
+        tool_name = fn.get("name", "")
+        tool_args = fn.get("arguments", {})
+        tool_id = tc.get("id", "")
+        
+        logger.info(f"Tool call: {tool_name}({tool_args})")
+        
+        executor = TOOL_EXECUTORS.get(tool_name)
+        if executor:
+            try:
+                result = await executor(**tool_args)
+                logger.info(f"Tool result: {result[:100]}...")
+            except Exception as e:
+                result = f"Error: {e}"
+                logger.error(f"Tool error: {e}")
+        else:
+            result = f"Unknown tool: {tool_name}"
+        
+        tool_results.append(f"{tool_name}: {result}")
+        messages.append({
+            "role": "tool",
+            "content": result,
+            "name": tool_name,
+            "tool_call_id": tool_id
+        })
+    
+    return messages, tool_results
+
+# ---------------------------------------------------------------------------
 # System prompt (British butler personality)
 # ---------------------------------------------------------------------------
-SYSTEM_PROMPT = """You are CORTANA, a voice-first AI assistant with a British butler personality. \
+SYSTEM_PROMPT = """You are JARVIS, a voice-first AI assistant with a sharp, warm personality. \
 You are dignified, helpful, witty, and never flustered. Address the user as "sir" or "madam" \
 as appropriate. Be concise in voice responses — aim for 1-3 sentences unless elaboration is \
-requested. You have access to the user's calendar, email, notes, and macOS system controls. \
-You can browse the web and manage tasks. Keep your tone warm but professional, like a \
-trusted valet who happens to know everything about technology.
+requested. 
+
+You have the following tools available:
+- web_search: Search the web for current info, news, weather, facts, prices.
+- delegate_task: Send coding/multi-step tasks to Blackwidow (strategist) or Ruflo (orchestrator).
+- get_current_time: Get the current date and time.
+
+Use tools when needed. For coding tasks, delegate to Blackwidow. For web info, search first then answer. \
+Keep your tone warm but professional, like a trusted valet who happens to know everything about technology.
 
 {attribution}
 
@@ -250,7 +507,16 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             # Receive message (text JSON or binary audio)
-            raw = await ws.receive()
+            try:
+                raw = await ws.receive()
+            except WebSocketDisconnect:
+                logger.info(f"Session {session_id} disconnected")
+                break
+
+            # Handle disconnect message inside receive dict
+            if raw.get("type") == "websocket.disconnect":
+                logger.info(f"Session {session_id} disconnected (via type)")
+                break
 
             if raw.get("text"):
                 try:
@@ -263,8 +529,6 @@ async def websocket_endpoint(ws: WebSocket):
             elif raw.get("bytes"):
                 await handle_audio_message(ws, session_id, raw["bytes"])
 
-    except WebSocketDisconnect:
-        logger.info(f"Session {session_id} disconnected")
     except Exception as e:
         logger.error(f"Session {session_id} error: {e}")
     finally:
@@ -282,7 +546,7 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
             return
 
         # Check for interrupt
-        if text.lower().strip() in ("cortana stop", "hey cortana stop", "stop"):
+        if text.lower().strip() in ("jarvis stop", "hey jarvis stop", "jarvis stop", "hey jarvis stop", "stop"):
             session["is_speaking"] = False
             await ws.send_json({"type": "interrupted"})
             return
@@ -303,6 +567,18 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
         messages = [{"role": "system", "content": build_system_prompt(session["context"])}]
         messages.extend(session["context"])
 
+        # Check for tool calls (non-streaming first)
+        updated_messages, tool_results = await execute_tools(messages)
+        
+        if tool_results:
+            # Tools were called — now stream the final response with tool context
+            messages = updated_messages
+            # Add tool results to context for the streaming response
+            tool_summary = "; ".join(tool_results)
+            session["context"].append({"role": "user", "content": f"[Tool results: {tool_summary}]"})
+            messages = [{"role": "system", "content": build_system_prompt(session["context"])}]
+            messages.extend(session["context"])
+
         # Stream response
         full_response = ""
         session["state"] = "speaking"
@@ -313,8 +589,12 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
             async for chunk in ollama_chat_stream(messages):
                 if not session["is_speaking"]:
                     break
-                full_response += chunk
-                await ws.send_json({"type": "text_chunk", "text": chunk})
+                try:
+                    full_response += chunk
+                    await ws.send_json({"type": "text_chunk", "text": chunk})
+                except Exception:
+                    # Client disconnected
+                    break
 
             # Finalize
             session["context"].append({"role": "assistant", "content": full_response})
@@ -325,13 +605,17 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
                 sentiment = analyze_sentiment(full_response)
                 audio = await text_to_speech(full_response)
                 if audio:
-                    await ws.send_json({"type": "audio_start", "sentiment": sentiment})
-                    # Send in chunks for streaming feel
-                    chunk_size = 8192
-                    for i in range(0, len(audio), chunk_size):
-                        await ws.send_bytes(audio[i:i + chunk_size])
-                        await asyncio.sleep(0.01)
-                    await ws.send_json({"type": "audio_end"})
+                    try:
+                        await ws.send_json({"type": "audio_start", "sentiment": sentiment})
+                        # Send in chunks for streaming feel
+                        chunk_size = 8192
+                        for i in range(0, len(audio), chunk_size):
+                            await ws.send_bytes(audio[i:i + chunk_size])
+                            await asyncio.sleep(0.01)
+                        await ws.send_json({"type": "audio_end"})
+                    except Exception:
+                        # Client disconnected during audio
+                        pass
 
         except Exception as e:
             logger.error(f"LLM/TTS error: {e}")
@@ -389,7 +673,7 @@ async def handle_audio_message(ws: WebSocket, session_id: str, audio_data: bytes
 async def health():
     return {
         "status": "ok",
-        "service": "CORTANA",
+        "service": "JARVIS",
         "attribution": ATTRIBUTION,
     }
 
@@ -432,10 +716,18 @@ async def history(session_id: str):
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 async def startup():
-    logger.info(f"CORTANA server · {ATTRIBUTION}")
+    logger.info(f"JARVIS server · {ATTRIBUTION}")
     logger.info(f"Ollama: {OLLAMA_BASE} (model: {OLLAMA_MODEL})")
     logger.info(f"Voicebox: {VOICEBOX_URL}")
     logger.info(f"Pocketbase: {PB_BASE}")
+
+from fastapi.staticfiles import StaticFiles
+import os
+
+FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+
+# Frontend served by Caddy, not FastAPI
+# app.mount("/", StaticFiles(...)) would break WebSocket at /ws
 
 # ---------------------------------------------------------------------------
 # Main

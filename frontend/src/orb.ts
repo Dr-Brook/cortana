@@ -1,5 +1,5 @@
 /**
- * CORTANA — Three.js Particle Orb
+ * JARVIS — Three.js Particle Orb
  * Audio-reactive particle system with sentiment-based color shifts.
  *
  * Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -26,7 +26,7 @@ interface OrbState {
   isListening: boolean;
 }
 
-export class CortanaOrb {
+export class JarvisOrb {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
@@ -78,7 +78,6 @@ export class CortanaOrb {
     this.colors = new Float32Array(PARTICLE_COUNT * 3);
 
     this.initParticles();
-    this.initColors();
 
     geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
@@ -94,6 +93,9 @@ export class CortanaOrb {
 
     this.particles = new THREE.Points(geometry, material);
     this.scene.add(this.particles);
+
+    // Now init colors — needs this.particles to exist
+    this.initColors();
 
     // Handle resize
     window.addEventListener('resize', this.onResize.bind(this));

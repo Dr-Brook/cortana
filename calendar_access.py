@@ -1,5 +1,5 @@
 """
-CORTANA — Apple Calendar Access
+JARVIS — Apple Calendar Access
 Read and create calendar events via AppleScript bridge.
 
 Built from CLAUDE.md by RJ - https://itsbrook.com
@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-logger = logging.getLogger("cortana.calendar")
+logger = logging.getLogger("jarvis.calendar")
 
 # Cache
 _cache: dict = {"events": [], "last_refresh": 0}

@@ -1,22 +1,22 @@
 /**
- * CORTANA — Main State Machine
+ * JARVIS — Main State Machine
  * States: idle → listening → thinking → speaking
  * Wake word detection, mic permission, visual state transitions.
  *
  * Built from CLAUDE.md by RJ - https://itsbrook.com
  */
 
-import { CortanaOrb } from './orb';
-import { WSClient } from './ws';
+import { JarvisOrb } from './orb';
+import { WSClient, WS_BASE } from './ws';
 import { VoicePipeline } from './voice';
 import { SettingsManager } from './settings';
 import './style.css';
 
 type State = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
-class CortanaApp {
+class JarvisApp {
   private state: State = 'idle';
-  private orb: CortanaOrb;
+  private orb: JarvisOrb;
   private ws: WSClient;
   private voice: VoicePipeline;
   private settings: SettingsManager;
@@ -34,9 +34,12 @@ class CortanaApp {
     this.micButton = document.getElementById('mic-button')!;
     this.statusDot = document.querySelector('#connection-status .dot')!;
 
+    // Show WS URL on startup so user can see what's being attempted
+    this.stateLabel.textContent = `Connecting to ${WS_BASE}...`;
+
     // Initialize components
     this.settings = new SettingsManager((settings) => this.onSettingsChange(settings));
-    this.orb = new CortanaOrb('orb-container');
+    this.orb = new JarvisOrb('orb-container');
     this.voice = new VoicePipeline();
     this.ws = new WSClient({
       onStateChange: (state, sentiment) => this.onStateChange(state, sentiment),
@@ -55,14 +58,34 @@ class CortanaApp {
   }
 
   private setupUI(): void {
-    // Mic button — push to talk
-    this.micButton.addEventListener('mousedown', () => this.startListening());
-    this.micButton.addEventListener('mouseup', () => this.stopListening());
-    this.micButton.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      this.startListening();
+    // Mic button — tap to dictate
+    this.micButton.addEventListener('click', () => {
+      if (this.isListening) {
+        this.stopListening();
+      } else {
+        this.startListening();
+      }
     });
-    this.micButton.addEventListener('touchend', () => this.stopListening());
+
+    // Text input — type a message
+    const textInput = document.getElementById('text-input') as HTMLInputElement;
+    const sendBtn = document.getElementById('send-button') as HTMLButtonElement;
+
+    const sendTextMessage = () => {
+      const text = textInput.value.trim();
+      if (!text) return;
+      this.transcript.innerHTML = `<span class="user-text">${this.escapeHtml(text)}</span>`;
+      this.ws.sendTranscript(text);
+      textInput.value = '';
+    };
+
+    sendBtn.addEventListener('click', sendTextMessage);
+    textInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendTextMessage();
+      }
+    });
 
     // Keyboard shortcut — spacebar to talk
     document.addEventListener('keydown', (e) => {
@@ -130,7 +153,7 @@ class CortanaApp {
 
   private updateStateLabel(): void {
     const labels: Record<State, string> = {
-      idle: 'Ready',
+      idle: 'Tap the mic to speak',
       listening: 'Listening...',
       thinking: 'Thinking...',
       speaking: 'Speaking...',
@@ -148,32 +171,62 @@ class CortanaApp {
       return;
     }
 
-    try {
-      await this.voice.startMicCapture();
+    // Use dictation (Web Speech API) instead of raw mic
+    if (VoicePipeline.hasDictation()) {
       this.isListening = true;
       this.setState('listening');
       (this.micButton as HTMLElement).classList.add('active');
-    } catch (e) {
-      console.error('[CORTANA] Mic access denied:', e);
-      this.setState('error');
-      this.stateLabel.textContent = 'Mic access denied';
+
+      let finalText = '';
+      this.voice.startDictation(
+        (text, isFinal) => {
+          if (isFinal) {
+            finalText += (finalText ? ' ' : '') + text;
+            this.transcript.innerHTML = `<span class="user-text">${this.escapeHtml(finalText)}</span>`;
+          } else {
+            // Show interim result
+            this.transcript.innerHTML = `<span class="user-text">${this.escapeHtml(finalText ? finalText + ' ' + text : text)}...</span>`;
+          }
+        },
+        () => {
+          // Recognition ended
+          this.isListening = false;
+          (this.micButton as HTMLElement).classList.remove('active');
+          if (finalText.trim()) {
+            this.ws.sendTranscript(finalText.trim());
+          } else {
+            this.setState('idle');
+          }
+        },
+        (err) => {
+          console.error('[JARVIS] Dictation error:', err);
+          this.isListening = false;
+          (this.micButton as HTMLElement).classList.remove('active');
+          // Fall back to text input mode
+          this.setState('idle');
+          this.transcript.innerHTML = 'Tap mic to dictate, or type below';
+        }
+      );
+    } else {
+      // Fallback: try mic capture (requires HTTPS)
+      try {
+        await this.voice.startMicCapture();
+        this.isListening = true;
+        this.setState('listening');
+        (this.micButton as HTMLElement).classList.add('active');
+      } catch (e) {
+        console.error('[JARVIS] Mic access denied:', e);
+        this.setState('idle');
+        this.transcript.innerHTML = 'Tap mic to dictate, or type below';
+      }
     }
   }
 
   private stopListening(): void {
     if (!this.isListening) return;
     this.isListening = false;
-    this.voice.stopMicCapture();
+    this.voice.stopDictation();
     (this.micButton as HTMLElement).classList.remove('active');
-
-    // For now, use text input as placeholder
-    // In production, this would send audio data to backend for STT
-    const text = this.transcript.textContent?.trim();
-    if (text && text !== 'Say something...') {
-      this.ws.sendTranscript(text);
-    } else {
-      this.setState('idle');
-    }
   }
 
   private interrupt(): void {
@@ -196,18 +249,13 @@ class CortanaApp {
   private onMessage(msg: any): void {
     if (msg.type === 'text_chunk') {
       this.currentResponse += msg.text;
-      this.transcript.innerHTML = `<span class="assistant-text">${this.escapeHtml(this.currentResponse)}</span>`;
+      // Voice-only: don't display response text, audio will play
+      // Still track it for context/continuity
     } else if (msg.type === 'error') {
       this.transcript.innerHTML = `<span class="error-text">Error: ${this.escapeHtml(msg.message)}</span>`;
       this.setState('error');
     } else if (msg.type === 'history') {
-      // Display conversation history
-      const html = msg.messages
-        .map((m: any) =>
-          `<span class="${m.role}-text">${m.role === 'user' ? 'You: ' : 'CORTANA: '}${this.escapeHtml(m.content)}</span>`
-        )
-        .join('<br/>');
-      this.transcript.innerHTML = html;
+      // Don't display history text either — voice-only
     }
   }
 
@@ -215,22 +263,29 @@ class CortanaApp {
     try {
       await this.voice.playAudio(data);
     } catch (e) {
-      console.error('[CORTANA] Audio playback error:', e);
+      console.error('[JARVIS] Audio playback error:', e);
     }
   }
 
   private onWSOpen(): void {
     this.statusDot.classList.add('connected');
     this.setState('idle');
+    this.transcript.innerHTML = '';
+    const dbg = document.getElementById('debug-banner');
+    if (dbg) dbg.textContent = '';
   }
 
   private onWSClose(): void {
     this.statusDot.classList.remove('connected');
+    const dbg = document.getElementById('debug-banner');
+    if (dbg) dbg.textContent = 'Disconnected — reconnecting...';
   }
 
   private onWSError(): void {
     this.setState('error');
     this.stateLabel.textContent = 'Connection lost';
+    const dbg = document.getElementById('debug-banner');
+    if (dbg) dbg.textContent = 'Connection error — check console';
   }
 
   // ---- Settings ----
@@ -261,18 +316,24 @@ const appContainer = document.getElementById('app')!;
 appContainer.innerHTML = `
   <div id="connection-status">
     <span class="dot"></span>
-    <span>CORTANA</span>
+    <span>JARVIS</span>
   </div>
+  <div id="debug-banner" style="position:fixed;bottom:80px;left:0;right:0;text-align:center;font-size:11px;color:#888;z-index:400;pointer-events:none;">Connecting...</div>
   <div id="orb-container"></div>
   <div id="state-label">Connecting...</div>
-  <div id="transcript">Say something...</div>
+  <div id="transcript">Tap mic to speak or type below</div>
+  <div id="text-input-container" style="display:flex; gap:8px; padding:0 20px; margin-bottom:10px;">
+    <input id="text-input" type="text" placeholder="Type a message..." style="flex:1; padding:10px 14px; background:var(--bg-primary); color:var(--text-primary); border:1px solid rgba(255,255,255,0.2); border-radius:20px; font-size:14px; outline:none;" />
+    <button id="send-button" style="padding:10px 16px; background:var(--accent-blue); color:white; border:none; border-radius:20px; cursor:pointer; font-size:14px;">Send</button>
+  </div>
   <button id="mic-button" title="Push to talk (Space)">🎤</button>
+  <div id="settings-backdrop" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:250;display:none;"></div>
   <button id="settings-toggle" title="Settings">⚙</button>
   <div id="settings-panel"></div>
 `;
 
 // Initialize app
-const app = new CortanaApp();
+const app = new JarvisApp();
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {

@@ -1,6 +1,7 @@
 /**
- * CORTANA — Voice Pipeline
+ * JARVIS — Voice Pipeline
  * Web Audio API for playback, mic capture, audio queue, interrupt handling.
+ * Web Speech API for dictation (speech-to-text).
  *
  * Built from CLAUDE.md by RJ - https://itsbrook.com
  */
@@ -16,6 +17,11 @@ export class VoicePipeline {
   private interruptRequested = false;
   private audioQueue: ArrayBuffer[] = [];
   private processingQueue = false;
+
+  // Speech-to-text (dictation)
+  private recognition: any = null;
+  private onTranscript: ((text: string) => void) | null = null;
+  private onDictationEnd: (() => void) | null = null;
 
   async init(): Promise<void> {
     this.audioContext = new AudioContext();
@@ -111,6 +117,11 @@ export class VoicePipeline {
 
   async startMicCapture(): Promise<void> {
     try {
+      // Check if getUserMedia is available (requires HTTPS or localhost)
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        console.warn('[Voice] Microphone not available — requires HTTPS or localhost');
+        return;
+      }
       this.micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -159,6 +170,76 @@ export class VoicePipeline {
     if (this.audioContext) {
       this.audioContext.close();
       this.audioContext = null;
+    }
+  }
+
+  // ---- Dictation (Web Speech API) ----
+
+  /**
+   * Check if dictation is available in this browser.
+   */
+  static hasDictation(): boolean {
+    return !!(window.SpeechRecognition || (window as any).webkitSpeechRecognition);
+  }
+
+  /**
+   * Start dictation. Calls onResult with interim/final transcripts.
+   */
+  startDictation(
+    onResult: (text: string, isFinal: boolean) => void,
+    onEnd: () => void,
+    onError: (err: string) => void
+  ): void {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      onError('Speech recognition not supported in this browser');
+      return;
+    }
+
+    // Stop any existing recognition
+    this.stopDictation();
+
+    this.recognition = new SpeechRecognition();
+    this.recognition.continuous = true;
+    this.recognition.interimResults = true;
+    this.recognition.lang = 'en-US';
+
+    this.recognition.onresult = (event: any) => {
+      let finalText = '';
+      let interimText = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalText += transcript;
+        } else {
+          interimText += transcript;
+        }
+      }
+      if (finalText) {
+        onResult(finalText, true);
+      } else if (interimText) {
+        onResult(interimText, false);
+      }
+    };
+
+    this.recognition.onerror = (event: any) => {
+      onError(event.error || 'Unknown error');
+    };
+
+    this.recognition.onend = () => {
+      onEnd();
+    };
+
+    this.recognition.start();
+  }
+
+  /**
+   * Stop dictation.
+   */
+  stopDictation(): void {
+    if (this.recognition) {
+      this.recognition.stop();
+      this.recognition = null;
     }
   }
 }

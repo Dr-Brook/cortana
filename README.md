@@ -1,4 +1,4 @@
-# CORTANA — Voice-First AI Assistant for macOS
+# JARVIS — Voice-First AI Assistant for macOS
 
 > *"At your service, sir."*
 
@@ -6,7 +6,7 @@ Built from CLAUDE.md by RJ - https://itsbrook.com
 
 ## Overview
 
-CORTANA is a voice-first AI assistant with a British butler personality, running locally on macOS. It features a real-time Three.js particle orb that responds to audio and sentiment, powered by local LLM inference via Ollama.
+JARVIS is a voice-first AI assistant with a British butler personality, running locally on macOS. It features a real-time Three.js particle orb that responds to audio and sentiment, powered by local LLM inference via Ollama.
 
 ## Architecture
 
@@ -18,7 +18,7 @@ CORTANA is a voice-first AI assistant with a British butler personality, running
 | AI (primary) | Ollama glm-5.1:cloud (local, offline-capable) |
 | TTS | Voicebox (kokoro, am_onyx) at localhost:17493 |
 | TTS fallback | macOS `say` |
-| Wake word | "Hey Cortana" / "Cortana" via openWakeWord |
+| Wake word | "Hey Jarvis" / "Jarvis" via openWakeWord |
 | System | AppleScript for macOS integrations |
 | Storage | Pocketbase v0.38.1 (port 8090) |
 | Orb | Three.js particle system with sentiment colors |
@@ -36,7 +36,7 @@ CORTANA is a voice-first AI assistant with a British butler personality, running
 ### Backend
 
 ```bash
-cd cortana
+cd jarvis
 pip install -r requirements.txt
 python server.py
 ```
@@ -46,7 +46,7 @@ Server runs on port **8444**.
 ### Frontend
 
 ```bash
-cd cortana/frontend
+cd jarvis/frontend
 npm install
 npm run dev
 ```
@@ -93,7 +93,7 @@ docker compose up
 ### Client → Server
 
 ```json
-{"type": "transcript", "text": "Hello Cortana"}
+{"type": "transcript", "text": "Hello Jarvis"}
 {"type": "interrupt"}
 {"type": "ping"}
 {"type": "get_history"}
