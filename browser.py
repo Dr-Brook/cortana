@@ -131,3 +131,54 @@ async def close_browser():
     if _browser:
         await _browser.close()
         _browser = None
+
+# ---------------------------------------------------------------------------
+# Tool Registration Interface (for tools.py auto-discovery)
+# ---------------------------------------------------------------------------
+MODULE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "browse",
+            "description": "Browse a URL and extract page content, or take a screenshot. Requires Playwright.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "Action: visit|screenshot|extract"},
+                    "url": {"type": "string", "description": "URL to visit"},
+                    "selector": {"type": "string", "description": "CSS selector for extract action"}
+                },
+                "required": ["action", "url"]
+            }
+        }
+    },
+]
+
+
+async def tool_browse(action: str, url: str, selector: str = "body") -> str:
+    """Execute a browse action."""
+    if action == "visit":
+        result = await browse_url(url)
+        if result.get("success"):
+            text = result.get("text", "")
+            title = result.get("title", "")
+            return f"Title: {title}\n\n{text[:3000]}"
+        else:
+            return f"Failed to browse {url}: {result.get('error', 'unknown error')}"
+    elif action == "screenshot":
+        screenshot = await take_screenshot(url)
+        if screenshot:
+            return f"Screenshot taken of {url} ({len(screenshot)} bytes)"
+        return f"Failed to screenshot {url}"
+    elif action == "extract":
+        text = await extract_text(url, selector)
+        if text:
+            return text[:3000]
+        return f"No text found at {url} with selector {selector}"
+    else:
+        return f"Unknown browse action: {action}"
+
+
+MODULE_EXECUTORS = {
+    "browse": tool_browse,
+}

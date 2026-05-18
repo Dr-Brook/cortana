@@ -97,3 +97,62 @@ async def list_sessions() -> list[dict]:
             "last_active": session["last_active"],
         })
     return result
+
+# ---------------------------------------------------------------------------
+# Tool Registration Interface (for tools.py auto-discovery)
+# ---------------------------------------------------------------------------
+MODULE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "work_session",
+            "description": "Manage Claude Code work sessions: start, send input, list, end.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "Action: start|send|list|end"},
+                    "name": {"type": "string", "description": "Session name"},
+                    "message": {"type": "string", "description": "Message to send (for send action)"},
+                    "working_dir": {"type": "string", "description": "Working directory (for start action)"}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+]
+
+
+async def tool_work_session(action: str, name: str = "", message: str = "",
+                            working_dir: str = "~") -> str:
+    """Execute a work session action."""
+    if action == "start":
+        if not name:
+            return "Need a session name to start"
+        result = await start_session(name, prompt=message, working_dir=working_dir)
+        return f"Started session: {name} (pid {result.get('pid')})"
+    elif action == "send":
+        if not name or not message:
+            return "Need name and message to send to session"
+        result = await send_to_session(name, message)
+        return result or f"No response from session {name}"
+    elif action == "list":
+        sessions = await list_sessions()
+        if not sessions:
+            return "No active work sessions"
+        lines = []
+        for s in sessions:
+            status = "active" if s.get("active") else "ended"
+            lines.append(f"- {s['name']} ({status}, pid {s['pid']}, dir: {s['working_dir']})")
+        return "\n".join(lines)
+    elif action == "end":
+        if not name:
+            return "Need a session name to end"
+        ok = await end_session(name)
+        return f"Ended session: {name}" if ok else f"Session not found: {name}"
+    else:
+        return f"Unknown work session action: {action}"
+
+
+MODULE_EXECUTORS = {
+    "work_session": tool_work_session,
+}
