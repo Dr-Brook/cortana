@@ -1,0 +1,17 @@
+# CORTANA — Built from CLAUDE.md by RJ - https://itsbrook.com
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+.eggs/
+venv/
+.env
+node_modules/
+frontend/dist/
+frontend/node_modules/
+.DS_Store
+*.log
+*.pyc
