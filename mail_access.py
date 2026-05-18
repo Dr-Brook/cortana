@@ -112,3 +112,59 @@ async def search_emails(query: str, limit: int = 10) -> list[dict]:
                     "date": parts[2].strip() if len(parts) > 2 else "",
                 })
     return messages[:limit]
+
+# ---------------------------------------------------------------------------
+# Tool Registration Interface (for tools.py auto-discovery)
+# ---------------------------------------------------------------------------
+MODULE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "mail",
+            "description": "Access Apple Mail: check unread count, read recent emails, search emails.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "Action: unread_count|recent|search"},
+                    "query": {"type": "string", "description": "Search query (for search action)"},
+                    "limit": {"type": "integer", "description": "Max results (default 5)"}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+]
+
+
+async def tool_mail(action: str, query: str = "", limit: int = 5) -> str:
+    """Execute a mail action."""
+    if action == "unread_count":
+        count = await get_unread_count()
+        return f"You have {count} unread emails" if count else "No unread emails"
+    elif action == "recent":
+        msgs = await get_recent_messages(limit=limit)
+        if not msgs:
+            return "No recent unread emails."
+        lines = []
+        for m in msgs:
+            line = f"- From: {m['sender']} | Subject: {m['subject']} | {m['date']}"
+            lines.append(line)
+        return "\n".join(lines)
+    elif action == "search":
+        if not query:
+            return "Need a search query"
+        msgs = await search_emails(query, limit=limit)
+        if not msgs:
+            return f"No emails found for: {query}"
+        lines = []
+        for m in msgs:
+            line = f"- From: {m['sender']} | Subject: {m['subject']} | {m['date']}"
+            lines.append(line)
+        return "\n".join(lines)
+    else:
+        return f"Unknown mail action: {action}"
+
+
+MODULE_EXECUTORS = {
+    "mail": tool_mail,
+}

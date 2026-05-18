@@ -102,3 +102,62 @@ async def search_notes(query: str, limit: int = 10) -> list[dict]:
                     "modified": parts[1].strip() if len(parts) > 1 else "",
                 })
     return notes[:limit]
+
+# ---------------------------------------------------------------------------
+# Tool Registration Interface (for tools.py auto-discovery)
+# ---------------------------------------------------------------------------
+MODULE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "apple_notes",
+            "description": "Access Apple Notes: list, create, and search notes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "Action: list|create|search"},
+                    "query": {"type": "string", "description": "Search query (for search action)"},
+                    "title": {"type": "string", "description": "Note title (for create action)"},
+                    "body": {"type": "string", "description": "Note body (for create action)"},
+                    "limit": {"type": "integer", "description": "Max results (default 10)"}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+]
+
+
+async def tool_apple_notes(action: str, query: str = "", title: str = "",
+                           body: str = "", limit: int = 10) -> str:
+    """Execute a notes action."""
+    if action == "list":
+        notes = await list_notes(limit=limit)
+        if not notes:
+            return "No notes found."
+        lines = []
+        for n in notes:
+            lines.append(f"- {n['name']} (modified: {n['modified']})")
+        return "\n".join(lines)
+    elif action == "create":
+        if not title:
+            return "Need a title to create a note"
+        ok = await create_note(title, body or title)
+        return f"Created note: {title}" if ok else "Failed to create note"
+    elif action == "search":
+        if not query:
+            return "Need a search query"
+        notes = await search_notes(query, limit=limit)
+        if not notes:
+            return f"No notes found for: {query}"
+        lines = []
+        for n in notes:
+            lines.append(f"- {n['name']} (modified: {n['modified']})")
+        return "\n".join(lines)
+    else:
+        return f"Unknown notes action: {action}"
+
+
+MODULE_EXECUTORS = {
+    "apple_notes": tool_apple_notes,
+}

@@ -119,3 +119,60 @@ async def get_cached_events() -> list[dict]:
     """Get events from cache, refreshing if needed."""
     await refresh_cache()
     return _cache["events"]
+
+# ---------------------------------------------------------------------------
+# Tool Registration Interface (for tools.py auto-discovery)
+# ---------------------------------------------------------------------------
+MODULE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "calendar",
+            "description": "Access Apple Calendar: list upcoming events, create events.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "Action: list_events|create_event|list_calendars"},
+                    "days": {"type": "integer", "description": "Days ahead to look (default 7)"},
+                    "summary": {"type": "string", "description": "Event title (for create_event)"},
+                    "start_date": {"type": "string", "description": "Start date/time (for create_event)"},
+                    "end_date": {"type": "string", "description": "End date/time (for create_event)"},
+                    "location": {"type": "string", "description": "Event location (for create_event)"}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+]
+
+
+async def tool_calendar(action: str, days: int = 7, summary: str = "",
+                        start_date: str = "", end_date: str = "",
+                        location: str = "") -> str:
+    """Execute a calendar action."""
+    if action == "list_events":
+        events = await get_upcoming_events(days=days)
+        if not events:
+            return "No upcoming events."
+        lines = []
+        for e in events:
+            line = f"- {e['summary']} | {e['start']}"
+            if e.get("location"):
+                line += f" | {e['location']}"
+            lines.append(line)
+        return "\n".join(lines)
+    elif action == "list_calendars":
+        cals = await list_calendars()
+        return "Calendars: " + ", ".join(cals) if cals else "No calendars found"
+    elif action == "create_event":
+        if not summary or not start_date:
+            return "Need summary and start_date to create event"
+        ok = await create_event(summary, start_date, end_date or start_date, location=location)
+        return f"Created event: {summary}" if ok else "Failed to create event"
+    else:
+        return f"Unknown calendar action: {action}"
+
+
+MODULE_EXECUTORS = {
+    "calendar": tool_calendar,
+}

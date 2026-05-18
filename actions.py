@@ -154,3 +154,64 @@ ACTIONS = {
     "get_battery": {"func": get_battery, "desc": "Get battery status", "args": []},
     "tell_time": {"func": tell_time, "desc": "Get current time", "args": []},
 }
+
+# ---------------------------------------------------------------------------
+# Tool Registration Interface (for tools.py auto-discovery)
+# ---------------------------------------------------------------------------
+MODULE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "system_control",
+            "description": "Control macOS system: volume, brightness, open apps, lock screen, battery status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "Action: set_volume|get_volume|toggle_mute|open_app|lock_screen|sleep_display|get_battery|tell_time"},
+                    "value": {"type": "string", "description": "Value for the action (e.g., volume level 0-100, app name)"}
+                },
+                "required": ["action"]
+            }
+        }
+    },
+]
+
+
+async def tool_system_control(action: str, value: str = "") -> str:
+    """Execute a system control action."""
+    if action == "set_volume":
+        if not value:
+            return "Please specify a volume level (0-100)"
+        await set_volume(int(value))
+        return f"Volume set to {value}"
+    elif action == "get_volume":
+        vol = await get_volume()
+        return f"Current volume: {vol}"
+    elif action == "toggle_mute":
+        await toggle_mute()
+        return "Toggled mute"
+    elif action == "open_app":
+        if not value:
+            return "Please specify an app name"
+        ok = await open_application(value)
+        return f"Opened {value}" if ok else f"Could not open {value}"
+    elif action == "lock_screen":
+        await lock_screen()
+        return "Screen locked"
+    elif action == "sleep_display":
+        await sleep_display()
+        return "Display sleeping"
+    elif action == "get_battery":
+        batt = await get_battery()
+        pct = batt.get("percent", "unknown")
+        charging = "charging" if batt.get("charging") else "on battery"
+        return f"Battery: {pct}%, {charging}"
+    elif action == "tell_time":
+        return await tell_time()
+    else:
+        return f"Unknown action: {action}"
+
+
+MODULE_EXECUTORS = {
+    "system_control": tool_system_control,
+}

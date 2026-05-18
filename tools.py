@@ -274,7 +274,7 @@ async def register_satellite_tools() -> None:
     modules = []
 
     # Try importing each satellite module
-    for mod_name in ["actions", "calendar_access", "mail_access", "notes_access", "memory", "browser", "work_mode"]:
+    for mod_name in ["actions", "calendar_access", "mail_access", "notes_access", "memory", "obsidian", "browser", "work_mode"]:
         try:
             mod = __import__(mod_name)
             modules.append((mod_name, mod))
