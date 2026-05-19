@@ -33,10 +33,16 @@ export class VoicePipeline {
   async init(): Promise<void> {
     if (!this.audioContext) {
       this.audioContext = new AudioContext();
+      // Expose for iOS PWA AudioContext unlock
+      (window as any).__jarvisAudioContext = this.audioContext;
     }
     // iOS Safari requires resume() after user gesture
     if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
+      try {
+        await this.audioContext.resume();
+      } catch (e) {
+        console.warn('[Voice] AudioContext resume failed on init:', e);
+      }
     }
     if (!this.gainNode) {
       this.gainNode = this.audioContext.createGain();
@@ -48,45 +54,78 @@ export class VoicePipeline {
   }
 
   // ---- Playback (HTML5 Audio — works on all mobile browsers) ----
+  // Persistent Audio element for iOS PWA gesture permission
+  private audioElement: HTMLAudioElement;
+  private currentBlobUrl: string | null = null;
+  private playRetries = 0;
+  private maxPlayRetries = 3;
 
-  private audioElement: HTMLAudioElement | null = null;
+  constructor() {
+    this.audioElement = new Audio();
+    this.audioElement.volume = 1;
+    this.audioElement.preload = 'auto';
+    (window as any).__jarvisAudioElement = this.audioElement;
+  }
 
   async playAudio(audioData: ArrayBuffer): Promise<void> {
     this.interruptRequested = false;
 
     try {
       console.log('[Voice] Playing audio, bytes:', audioData.byteLength);
-      // Convert WAV bytes to a blob URL — universally supported
-      const blob = new Blob([audioData], { type: 'audio/wav' });
-      const url = URL.createObjectURL(blob);
 
-      // Stop any current playback
-      if (this.audioElement) {
-        this.audioElement.pause();
-        this.audioElement = null;
+      // Revoke previous blob URL
+      if (this.currentBlobUrl) {
+        URL.revokeObjectURL(this.currentBlobUrl);
+        this.currentBlobUrl = null;
       }
 
-      this.audioElement = new Audio(url);
+      const blob = new Blob([audioData], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      this.currentBlobUrl = url;
+
+      // Stop current playback on persistent element
+      this.audioElement.pause();
+      this.audioElement.onended = null;
+      this.audioElement.onerror = null;
+
+      this.audioElement.src = url;
       this.audioElement.volume = this.gainNode?.gain.value ?? 1;
+      this.audioElement.currentTime = 0;
 
       return new Promise<void>((resolve) => {
-        this.audioElement!.onended = () => {
+        let resolved = false;
+        const done = () => {
+          if (resolved) return;
+          resolved = true;
           this.isPlaying = false;
-          URL.revokeObjectURL(url);
+        };
+
+        this.audioElement.onended = () => {
+          done();
           resolve();
         };
-        this.audioElement!.onerror = (e) => {
+        this.audioElement.onerror = (e) => {
           console.error('[Voice] Audio element error:', e);
-          this.isPlaying = false;
-          URL.revokeObjectURL(url);
+          done();
           resolve();
         };
-        this.audioElement!.play().catch((err) => {
-          console.error('[Voice] play() failed:', err);
-          this.isPlaying = false;
-          resolve();
-        });
-        this.isPlaying = true;
+
+        // iOS PWA: play() can fail if not unlocked. Retry up to maxPlayRetries times.
+        const attemptPlay = (retriesLeft: number) => {
+          this.audioElement.play().then(() => {
+            this.isPlaying = true;
+          }).catch((err) => {
+            console.warn(`[Voice] play() failed (retries left: ${retriesLeft}):`, err);
+            if (retriesLeft > 0 && !this.interruptRequested) {
+              setTimeout(() => attemptPlay(retriesLeft - 1), 150);
+            } else {
+              done();
+              resolve();
+            }
+          });
+        };
+
+        attemptPlay(this.maxPlayRetries);
       });
     } catch (e) {
       console.error('[Voice] Playback error:', e);
@@ -115,9 +154,17 @@ export class VoicePipeline {
 
   interrupt(): void {
     this.interruptRequested = true;
-    if (this.audioElement) {
-      this.audioElement.pause();
-      this.audioElement = null;
+    if (this.currentSource) {
+      try { this.currentSource.stop(); } catch {}
+      this.currentSource = null;
+    }
+    // Don't null audioElement — it's persistent for iOS PWA
+    this.audioElement.pause();
+    this.audioElement.onended = null;
+    this.audioElement.onerror = null;
+    if (this.currentBlobUrl) {
+      URL.revokeObjectURL(this.currentBlobUrl);
+      this.currentBlobUrl = null;
     }
     this.isPlaying = false;
     this.audioQueue = [];
@@ -197,9 +244,9 @@ export class VoicePipeline {
     this.interrupt();
     this.stopMicCapture();
     this.stopBackendSTT();
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
+    // Don't close AudioContext — reuse it. iOS PWA breaks if you close it.
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      try { this.audioContext.suspend(); } catch {}
     }
   }
 

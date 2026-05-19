@@ -1,17 +1,10 @@
-/**
- * JARVIS — WebSocket Client
- * Auto-reconnect with exponential backoff, JSON + binary handling.
- *
- * Built from CLAUDE.md by RJ - https://itsbrook.com
- */
-
 // Dynamic WebSocket URL — uses the same host as the page.
 // Caddy routes /ws to the backend.
-// If accessing directly (localhost:3002), use port 8444.
+// If accessing directly (localhost:3002/3003), use port 8444.
 export const WS_BASE = import.meta.env.VITE_WS_URL || (() => {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const isDev = window.location.port === '5173';
-  const isDirect = window.location.port === '3002' || isDev;
+  const isDirect = window.location.port === '3002' || window.location.port === '3003' || isDev;
   if (isDirect) {
     // Direct access — backend is on same host, port 8444
     return `${proto}//${window.location.hostname}:8444/ws`;
