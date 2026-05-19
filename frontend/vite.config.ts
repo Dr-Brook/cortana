@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     port: 3002,
     host: true,
-    allowedHosts: ['jarvis.100.89.58.6.nip.io', 'cortana.100.89.58.6.nip.io', '10.0.0.157', 'localhost'],
+    allowedHosts: ['jarvis.100.89.58.6.nip.io', '10.0.0.157', 'localhost'],
   },
   build: {
     outDir: 'dist',
