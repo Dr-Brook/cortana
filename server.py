@@ -25,7 +25,29 @@ from config import (
     BACKEND_PORT, FRONTEND_PORT, MAX_CONTEXT,
     SERPER_API_KEY, OPENCLAW_URL, DUCKDUCKGO_URL,
     ATTRIBUTION,
+    TELEGRAM_CHAT_ID, OPENCLAW_TELEGRAM_TOPIC,
 )
+
+# ---------------------------------------------------------------------------
+# Telegram Relay
+# ---------------------------------------------------------------------------
+async def relay_to_telegram(user_text: str, jarvis_response: str) -> None:
+    """Send a conversation summary to Telegram via OpenClaw CLI."""
+    try:
+        summary = f"🎙️ **You:** {user_text[:150]}\n🤖 **JARVIS:** {jarvis_response[:300]}"
+        proc = await asyncio.create_subprocess_exec(
+            "openclaw", "message", "send",
+            "--channel", "telegram",
+            "--target", "-1003471219808",
+            "--thread-id", "19",
+            "--message", summary,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.wait()
+    except Exception as e:
+        logger.warning(f"Telegram relay failed: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -88,18 +110,35 @@ You have the following tools available:
 {tools_section}
 
 Use tools when needed. For coding tasks, delegate to Blackwidow. For web info, search first then answer. \
+When the user asks about weather, call the /weather endpoint to get real-time forecast data from weather.gov (Montgomery County, MD). \
 Keep your tone warm but professional, like a trusted valet who happens to know everything about technology.
 
 {attribution}
 
-Current context: {{context}}
-Current time: {{time}}
+{{{{memory_section}}}}
+Current context: {{{{context}}}}
+Current time: {{{{time}}}}
 """.format(attribution=ATTRIBUTION, tools_section=get_system_prompt_tools_section())
 
-def build_system_prompt(context: list[dict]) -> str:
-    """Build the system prompt with current context."""
+async def _load_memory() -> str:
+    """Load Obsidian memory and daily note for system prompt."""
     from datetime import datetime
-    prompt = SYSTEM_PROMPT.replace("{{context}}", json.dumps(context[-5:]) if context else "[]")
+    try:
+        from obsidian import read_memory, read_daily_note
+        memory_content = await read_memory()
+        today = datetime.now().strftime("%Y-%m-%d")
+        daily = await read_daily_note(today)
+        return f"""## Your Long-Term Memory\n{memory_content[:2000]}\n\n## Today's Notes\n{daily[:1500]}"""
+    except Exception as e:
+        logger.warning(f"Failed to load memory: {e}")
+        return ""
+
+
+def build_system_prompt(context: list[dict], memory_section: str = "") -> str:
+    """Build the system prompt with current context and Obsidian memory."""
+    from datetime import datetime
+    prompt = SYSTEM_PROMPT.replace("{{memory_section}}", memory_section)
+    prompt = prompt.replace("{{context}}", json.dumps(context[-5:]) if context else "[]")
     prompt = prompt.replace("{{time}}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     return prompt
 
@@ -184,7 +223,8 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
         await ws.send_json({"type": "state", "state": "thinking", "sentiment": sentiment})
 
         # Build messages for Ollama
-        messages = [{"role": "system", "content": build_system_prompt(session["context"])}]
+        memory_section = await _load_memory()
+        messages = [{"role": "system", "content": build_system_prompt(session["context"], memory_section)}]
         messages.extend(session["context"])
 
         # Check for tool calls (non-streaming first)
@@ -196,7 +236,7 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
             # Add tool results to context for the streaming response
             tool_summary = "; ".join(tool_results)
             session["context"].append({"role": "user", "content": f"[Tool results: {tool_summary}]"})
-            messages = [{"role": "system", "content": build_system_prompt(session["context"])}]
+            messages = [{"role": "system", "content": build_system_prompt(session["context"], memory_section)}]
             messages.extend(session["context"])
 
         # Stream response
@@ -225,6 +265,7 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
                 sentiment = analyze_sentiment(full_response)
                 audio = await text_to_speech(full_response)
                 if audio:
+                    logger.info(f"TTS audio ready: {len(audio)} bytes, sending to client")
                     try:
                         await ws.send_json({"type": "audio_start", "sentiment": sentiment})
                         # Send in chunks for streaming feel
@@ -233,9 +274,12 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
                             await ws.send_bytes(audio[i:i + chunk_size])
                             await asyncio.sleep(0.01)
                         await ws.send_json({"type": "audio_end"})
-                    except Exception:
-                        # Client disconnected during audio
+                        logger.info("TTS audio sent successfully")
+                    except Exception as e:
+                        logger.warning(f"Client disconnected during audio: {e}")
                         pass
+                else:
+                    logger.warning("TTS returned no audio")
 
         except Exception as e:
             logger.error(f"LLM/TTS error: {e}")
@@ -250,6 +294,17 @@ async def handle_json_message(ws: WebSocket, session_id: str, msg: dict):
             try:
                 from memory import save_exchange
                 await save_exchange(session_id, text, full_response, sentiment)
+
+                # Also save to Obsidian daily note
+                from obsidian import append_to_daily_note
+                from datetime import datetime
+                ts = datetime.now().strftime("%H:%M")
+                await append_to_daily_note(f"**{ts}** User: {text[:200]}\n**{ts}** JARVIS: {full_response[:200]}")
+
+                # Relay to Telegram
+                await relay_to_telegram(text, full_response)
+            except Exception as e:
+                logger.warning(f"Failed to save exchange to memory: {e}")
                 logger.debug(f"Saved exchange to memory for session {session_id}")
             except Exception as e:
                 logger.warning(f"Failed to save exchange to Pocketbase: {e}")
@@ -367,6 +422,91 @@ async def status():
         "model": OLLAMA_MODEL,
         "attribution": ATTRIBUTION,
     }
+
+@app.get("/weather")
+async def weather():
+    """Fetch weather forecast from weather.gov API (no key needed)."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.weather.gov/gridpoints/LWX/96,90/forecast",
+                headers={"User-Agent": "JARVIS/1.0", "Accept": "application/geo+json"},
+            )
+            if resp.status_code != 200:
+                return {"error": f"weather.gov returned {resp.status_code}"}
+            data = resp.json()
+            periods = data.get("properties", {}).get("periods", [])[:8]
+            forecast = []
+            for p in periods:
+                forecast.append({
+                    "name": p.get("name", ""),
+                    "temperature": f"{p.get('temperature', '?')}°F",
+                    "wind": f"{p.get('windSpeed', '?')} {p.get('windDirection', '?')}",
+                    "short": p.get("shortForecast", ""),
+                    "detail": p.get("detailedForecast", ""),
+                    "precip": f"{p.get('probabilityOfPrecipitation', {}).get('value', '?')}%",
+                })
+            return {"location": "Montgomery County, MD", "forecast": forecast}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/news")
+async def news():
+    """Fetch top news headlines from free APIs."""
+    import xml.etree.ElementTree as ET
+    articles = []
+
+    # Source 1: Google News RSS (unlimited, no key)
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://news.google.com/rss/search?q=us+top+stories&hl=en-US&gl=US&ceid=US:en",
+                headers={"User-Agent": "JARVIS/1.0"}
+            )
+            if resp.status_code == 200:
+                root = ET.fromstring(resp.text)
+                items = list(root.iter("item"))[:10]
+                for item in items:
+                    title = item.findtext("title", "")
+                    link = item.findtext("link", "")
+                    pub_date = item.findtext("pubDate", "")[:16]
+                    source_el = item.find("source")
+                    source_name = source_el.text if source_el is not None else ""
+                    desc = item.findtext("description", "")[:140]
+                    articles.append({"title": title, "source": source_name, "url": link, "published": pub_date, "desc": desc})
+    except Exception as e:
+        logger.warning(f"Google News RSS failed: {e}")
+
+    # Source 2: Currents API (needs free key from currentsapi.services)
+    currents_key = os.environ.get("CURRENTS_API_KEY", "")
+    if not articles and currents_key:
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                resp = await client.get(
+                    "https://api.currentsapi.services/v1/latest-news",
+                    params={"language": "en", "country": "US", "apiKey": currents_key},
+                    headers={"User-Agent": "JARVIS/1.0"}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for a in data.get("news", [])[:10 - len(articles)]:
+                        title = a.get("title", "")
+                        if not title:
+                            continue
+                        source = a.get("author", a.get("source", "")) or ""
+                        if isinstance(source, dict):
+                            source = source.get("name", "")
+                        published = (a.get("published", "") or "")[:10]
+                        desc = (a.get("description") or a.get("content") or "")[:140]
+                        url = a.get("url", "")
+                        articles.append({"title": title, "source": source, "url": url, "published": published, "desc": desc})
+        except Exception as e:
+            logger.warning(f"Currents API failed: {e}")
+
+    if not articles:
+        return {"articles": [], "message": "No news available"}
+    return {"articles": articles[:10]}
 
 @app.get("/history/{session_id}")
 async def history(session_id: str):

@@ -53,6 +53,10 @@ DUCKDUCKGO_URL: str = "https://api.duckduckgo.com/"
 TELEGRAM_CHAT_ID: str = "-1003471219808"
 TOPIC_BLACKWIDOW: int = 26
 TOPIC_RUFLO: int = 23
+TOPIC_JARVIS: int = 19
+
+# Telegram relay via OpenClaw
+OPENCLAW_TELEGRAM_TOPIC: int = 19  # 🤖 Jarvis topic
 
 # ---------------------------------------------------------------------------
 # Attribution

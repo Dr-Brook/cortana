@@ -59,10 +59,42 @@ async def transcribe_audio(audio_data: bytes) -> Optional[str]:
 
         model = _get_model()
 
-        # Write audio to temp file for faster-whisper
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(audio_data)
-            tmp_path = tmp.name
+        # Detect format — browser MediaRecorder sends WebM/Opus, Whisper needs WAV/PCM
+        input_path = None
+        tmp_path = None
+        try:
+            if audio_data[:4] == b'RIFF' or audio_data[:4] == b'\x1aE\xdf\xa3':
+                # Already WAV or Ogg — write directly
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    tmp.write(audio_data)
+                    tmp_path = tmp.name
+            else:
+                # Likely WebM/Opus from browser — convert via ffmpeg
+                import subprocess
+                with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp_in:
+                    tmp_in.write(audio_data)
+                    input_path = tmp_in.name
+                tmp_path = input_path.replace(".webm", ".wav")
+                result = subprocess.run(
+                    ["ffmpeg", "-y", "-i", input_path, "-ar", "16000", "-ac", "1", "-f", "wav", tmp_path],
+                    capture_output=True, timeout=10
+                )
+                if result.returncode != 0:
+                    logger.warning(f"ffmpeg conversion failed: {result.stderr.decode()[:200]}")
+                    # Try transcribing raw data anyway
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp.write(audio_data)
+                        tmp_path = tmp.name
+                try:
+                    os.unlink(input_path)
+                except OSError:
+                    pass
+
+        except Exception as e:
+            logger.warning(f"Audio format conversion failed: {e}")
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp.write(audio_data)
+                tmp_path = tmp.name
 
         # Run transcription in thread pool (CPU-bound)
         loop = asyncio.get_event_loop()

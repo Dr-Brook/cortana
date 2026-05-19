@@ -86,9 +86,34 @@ async def tts_say(text: str) -> Optional[bytes]:
 
 
 async def text_to_speech(text: str) -> Optional[bytes]:
-    """TTS pipeline: Voicebox first, fallback to macOS say."""
+    """TTS pipeline: Voicebox first, fallback to macOS say.
+    Converts to 16kHz mono WAV for maximum browser compatibility."""
     audio = await tts_voicebox(text)
-    if audio:
-        return audio
-    logger.info("Voicebox unavailable, falling back to macOS say")
-    return await tts_say(text)
+    if not audio:
+        logger.info("Voicebox unavailable, falling back to macOS say")
+        audio = await tts_say(text)
+    if not audio:
+        return None
+
+    # Normalize to 16kHz mono WAV — iOS Safari and all browsers handle this reliably
+    try:
+        import subprocess
+        with tempfile.NamedTemporaryFile(suffix=".in", delete=False) as tmp_in:
+            tmp_in.write(audio)
+            in_path = tmp_in.name
+        out_path = in_path + ".wav"
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", in_path, "-ar", "16000", "-ac", "1", "-f", "wav", out_path],
+            capture_output=True, timeout=10
+        )
+        if result.returncode == 0 and Path(out_path).exists():
+            audio = Path(out_path).read_bytes()
+        try:
+            os.unlink(in_path)
+            os.unlink(out_path)
+        except OSError:
+            pass
+    except Exception as e:
+        logger.warning(f"Audio normalization failed: {e}")
+
+    return audio

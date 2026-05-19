@@ -31,35 +31,61 @@ export class VoicePipeline {
   private onAudioChunk: ((data: ArrayBuffer) => void) | null = null;
 
   async init(): Promise<void> {
-    this.audioContext = new AudioContext();
-    this.gainNode = this.audioContext.createGain();
-    this.gainNode.connect(this.audioContext.destination);
-
-    this.analyser = this.audioContext.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.gainNode.connect(this.analyser);
+    if (!this.audioContext) {
+      this.audioContext = new AudioContext();
+    }
+    // iOS Safari requires resume() after user gesture
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume();
+    }
+    if (!this.gainNode) {
+      this.gainNode = this.audioContext.createGain();
+      this.gainNode.connect(this.audioContext.destination);
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 256;
+      this.gainNode.connect(this.analyser);
+    }
   }
 
-  // ---- Playback ----
+  // ---- Playback (HTML5 Audio — works on all mobile browsers) ----
+
+  private audioElement: HTMLAudioElement | null = null;
 
   async playAudio(audioData: ArrayBuffer): Promise<void> {
-    if (!this.audioContext) await this.init();
     this.interruptRequested = false;
 
     try {
-      const audioBuffer = await this.audioContext!.decodeAudioData(audioData.slice(0));
-      const source = this.audioContext!.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(this.gainNode!);
-      this.currentSource = source;
+      console.log('[Voice] Playing audio, bytes:', audioData.byteLength);
+      // Convert WAV bytes to a blob URL — universally supported
+      const blob = new Blob([audioData], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+
+      // Stop any current playback
+      if (this.audioElement) {
+        this.audioElement.pause();
+        this.audioElement = null;
+      }
+
+      this.audioElement = new Audio(url);
+      this.audioElement.volume = this.gainNode?.gain.value ?? 1;
 
       return new Promise<void>((resolve) => {
-        source.onended = () => {
+        this.audioElement!.onended = () => {
           this.isPlaying = false;
-          this.currentSource = null;
+          URL.revokeObjectURL(url);
           resolve();
         };
-        source.start(0);
+        this.audioElement!.onerror = (e) => {
+          console.error('[Voice] Audio element error:', e);
+          this.isPlaying = false;
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+        this.audioElement!.play().catch((err) => {
+          console.error('[Voice] play() failed:', err);
+          this.isPlaying = false;
+          resolve();
+        });
         this.isPlaying = true;
       });
     } catch (e) {
@@ -89,13 +115,9 @@ export class VoicePipeline {
 
   interrupt(): void {
     this.interruptRequested = true;
-    if (this.currentSource) {
-      try {
-        this.currentSource.stop();
-      } catch {
-        // Already stopped
-      }
-      this.currentSource = null;
+    if (this.audioElement) {
+      this.audioElement.pause();
+      this.audioElement = null;
     }
     this.isPlaying = false;
     this.audioQueue = [];

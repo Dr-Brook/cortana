@@ -9,6 +9,7 @@ Built from CLAUDE.md by RJ - https://itsbrook.com
 import asyncio
 import json
 import logging
+import os
 import re
 import subprocess
 from datetime import datetime
@@ -62,6 +63,32 @@ TOOL_DEFINITIONS = [
             "name": "get_current_time",
             "description": "Get the current date and time.",
             "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather forecast for Montgomery County, MD. Returns temperature, wind, precipitation chance, and detailed forecast for the next few days.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_news",
+            "description": "Get current news headlines. Search by keyword, category, country, or language. Uses multiple free news APIs (Currents API, Google News RSS, FreeNewsApi.io, GNews).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search keyword or topic (e.g. 'technology', 'AI', 'public health')"},
+                    "category": {"type": "string", "description": "News category: general, business, entertainment, health, science, sports, technology", "default": "general"},
+                    "country": {"type": "string", "description": "Country code (e.g. 'us', 'gb', 'et' for Ethiopia)", "default": "us"},
+                    "language": {"type": "string", "description": "Language code (e.g. 'en', 'es', 'fr')", "default": "en"},
+                    "limit": {"type": "integer", "description": "Max number of articles to return", "default": 5}
+                },
+                "required": []
+            }
         }
     },
 ]
@@ -160,6 +187,121 @@ async def tool_get_current_time() -> str:
     return datetime.now().strftime("%A, %B %d, %Y at %I:%M %p EDT")
 
 
+async def tool_get_weather() -> str:
+    """Fetch weather forecast from weather.gov for Montgomery County, MD."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://api.weather.gov/gridpoints/LWX/96,90/forecast",
+                headers={"User-Agent": "JARVIS/1.0", "Accept": "application/geo+json"},
+            )
+            if resp.status_code != 200:
+                return f"Weather unavailable (status {resp.status_code})"
+            data = resp.json()
+            periods = data.get("properties", {}).get("periods", [])[:6]
+            lines = []
+            for p in periods:
+                name = p.get("name", "")
+                temp = f"{p.get('temperature', '?')}°F"
+                wind = f"{p.get('windSpeed', '?')} {p.get('windDirection', '?')}"
+                short = p.get("shortForecast", "")
+                precip = p.get("probabilityOfPrecipitation", {}).get("value", "?")
+                lines.append(f"{name}: {temp}, {short}, wind {wind}, rain {precip}%")
+            return "Montgomery County, MD forecast:\n" + "\n".join(lines)
+    except Exception as e:
+        return f"Weather fetch failed: {e}"
+
+
+async def tool_get_news(query: str = "", category: str = "general", country: str = "us", language: str = "en", limit: int = 5) -> str:
+    """Fetch news from multiple free APIs. Tries Currents API first, then GNews, then Google News RSS."""
+    articles = []
+
+    # --- Source 1: Currents API (600 req/day, 14k+ sources, no key for basic) ---
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            params = {"language": language, "country": country}
+            if category != "general":
+                params["category"] = category
+            if query:
+                params["keywords"] = query
+            resp = await client.get(
+                "https://api.currentsapi.services/v1/latest-news",
+                params=params,
+                headers={"User-Agent": "JARVIS/1.0"}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for a in data.get("news", [])[:limit]:
+                    title = a.get("title", "")
+                    desc = (a.get("description") or a.get("content") or "")[:120]
+                    source = a.get("author", a.get("source", ""))
+                    url = a.get("url", "")
+                    published = a.get("published", "")[:10]
+                    articles.append(f"• {title} ({source}, {published})\n  {desc}\n  {url}")
+    except Exception as e:
+        logger.warning(f"Currents API failed: {e}")
+
+    if articles:
+        header = f"📰 News{f' - {query}' if query else ''} ({category}, {country.upper()})"
+        return header + "\n\n" + "\n".join(articles[:limit])
+
+    # --- Source 2: GNews (100 req/day, requires free key) ---
+    # Skipped if no key configured — fallback to RSS below
+
+    # --- Source 3: Google News RSS (unlimited, no key) ---
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            search_q = query or category
+            url = f"https://news.google.com/rss/search?q={search_q}&hl={language}&gl={country}&ceid={country}:{language}"
+            resp = await client.get(url, headers={"User-Agent": "JARVIS/1.0"})
+            if resp.status_code == 200:
+                # Parse RSS XML
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(resp.text)
+                for item in root.iter("item")[:limit]:
+                    title = item.findtext("title", "")
+                    link = item.findtext("link", "")
+                    pub_date = item.findtext("pubDate", "")[:16]
+                    source_el = item.find("source")
+                    source_name = source_el.text if source_el is not None else ""
+                    articles.append(f"• {title} ({source_name}, {pub_date})\n  {link}")
+    except Exception as e:
+        logger.warning(f"Google News RSS failed: {e}")
+
+    if articles:
+        header = f"📰 News{f' - {query}' if query else ''} ({category}, {country.upper()})"
+        return header + "\n\n" + "\n".join(articles[:limit])
+
+    # --- Source 4: FreeNewsApi.io (5000 req/day, requires free key) ---
+    # Skipped without key — user can add FREENEWS_KEY to .env
+    freenews_key = os.environ.get("FREENEWS_KEY", "")
+    if freenews_key:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                params = {"apikey": freenews_key, "language": language, "country": country}
+                if query:
+                    params["q"] = query
+                if category != "general":
+                    params["category"] = category
+                resp = await client.get("https://freenewsapi.io/api/v1/articles", params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for a in data.get("articles", [])[:limit]:
+                        title = a.get("title", "")
+                        desc = (a.get("description") or "")[:120]
+                        source = a.get("source", {}).get("name", "")
+                        url = a.get("url", "")
+                        articles.append(f"• {title} ({source})\n  {desc}\n  {url}")
+        except Exception as e:
+            logger.warning(f"FreeNewsApi failed: {e}")
+
+    if articles:
+        header = f"📰 News{f' - {query}' if query else ''} ({category}, {country.upper()})"
+        return header + "\n\n" + "\n".join(articles[:limit])
+
+    return "No news available at the moment. All sources failed."
+
+
 # ---------------------------------------------------------------------------
 # Tool Executor Registry
 # ---------------------------------------------------------------------------
@@ -167,6 +309,8 @@ TOOL_EXECUTORS = {
     "web_search": tool_web_search,
     "delegate_task": tool_delegate_task,
     "get_current_time": tool_get_current_time,
+    "get_weather": tool_get_weather,
+    "get_news": tool_get_news,
 }
 
 

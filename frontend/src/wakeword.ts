@@ -47,7 +47,8 @@ export class WakeWordDetector {
       // Try to load the openWakeWord WASM module
       // This will fail gracefully if not available
       try {
-        const mod = await import(/* webpackIgnore: true */ 'openwakeword-wasm').catch(() => null);
+        const _pkg = 'openwakeword-wasm';
+        const mod = await import(/* @vite-ignore */ _pkg).catch(() => null);
         return !!mod;
       } catch {
         // WASM module not installed yet — will use fallback
@@ -143,7 +144,8 @@ export class WakeWordDetector {
 
   private async _startOWW(source: MediaStreamAudioSourceNode): Promise<void> {
     try {
-      const OpenWakeWord = await import(/* webpackIgnore: true */ 'openwakeword-wasm').catch(() => null);
+      const _pkg = 'openwakeword-wasm';
+      const OpenWakeWord = await import(/* @vite-ignore */ _pkg).catch(() => null);
       if (!OpenWakeWord?.default) {
         this._startVolumeDetection(source);
         return;
